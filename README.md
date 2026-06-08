@@ -53,7 +53,7 @@ npm run build
 
 ### Codex
 
-Install the skill by symlinking or copying the skill directory after the local build exists:
+Install the skill by symlinking the skill directory after the local build exists. Symlink install is recommended because the bundled `scripts/dw` wrapper can resolve back to this repository's runtime:
 
 ```sh
 mkdir -p ~/.agents/skills
@@ -67,6 +67,8 @@ mkdir -p ~/.agents/skills
 rm -rf ~/.agents/skills/dynamic-workflow
 cp -R /path/to/dynamic-workflow/skills/dynamic-workflow ~/.agents/skills/dynamic-workflow
 ```
+
+Copy install only copies the skill instructions and bundled templates. Keep the repository checkout and build available, because the runtime still lives at `/path/to/dynamic-workflow/bin/dw.mjs`.
 
 Restart Codex after installing or updating the skill. Older local Codex setups may also scan `~/.codex/skills`; current Codex skill docs use `~/.agents/skills`.
 
@@ -139,14 +141,15 @@ Good fit because the workflow needs conditional branches, multiple verification 
 
 For any of these requests, the agent must:
 
-1. Resolve the package root.
-2. Write or select a typed plan.
-3. Run `validate`.
-4. Run `compile` and show a concise manifest summary.
-5. Continue without another user command through `run`, `status`, `review`, and `summarize`.
-6. Stop before execution only when the user explicitly asks for plan-only review.
-7. Resolve omitted plan paths and run ids from recent context when unambiguous.
-8. Ask one disambiguating question only when multiple recent plans or runs are plausible.
+1. Resolve the skill directory containing `SKILL.md`.
+2. Resolve the package root containing `bin/dw.mjs`.
+3. Write or select a typed plan from the skill template, then adapt it to the task.
+4. Run `validate`.
+5. Run `compile` and show a concise manifest summary.
+6. Continue without another user command through `run`, `status`, `review`, and `summarize`.
+7. Stop before execution only when the user explicitly asks for plan-only review.
+8. Resolve omitted plan paths and run ids from recent context when unambiguous.
+9. Ask one disambiguating question only when multiple recent plans or runs are plausible.
 
 Successful runs print markers like:
 
@@ -165,13 +168,13 @@ DW_RUN_COMPLETE
 The skill uses the same CLI directly:
 
 ```sh
-node bin/dw.mjs validate skills/dynamic-workflow/templates/plan.yaml
-node bin/dw.mjs compile skills/dynamic-workflow/templates/plan.yaml
-node bin/dw.mjs run skills/dynamic-workflow/templates/plan.yaml
-node bin/dw.mjs status <run-id>
-node bin/dw.mjs review <run-id>
-node bin/dw.mjs summarize <run-id>
-node bin/dw.mjs resume <run-id>
+node /path/to/dynamic-workflow/bin/dw.mjs validate /path/to/dynamic-workflow/skills/dynamic-workflow/templates/plan.yaml
+node /path/to/dynamic-workflow/bin/dw.mjs compile /path/to/dynamic-workflow/skills/dynamic-workflow/templates/plan.yaml
+node /path/to/dynamic-workflow/bin/dw.mjs run /path/to/dynamic-workflow/skills/dynamic-workflow/templates/plan.yaml
+node /path/to/dynamic-workflow/bin/dw.mjs status <run-id>
+node /path/to/dynamic-workflow/bin/dw.mjs review <run-id>
+node /path/to/dynamic-workflow/bin/dw.mjs summarize <run-id>
+node /path/to/dynamic-workflow/bin/dw.mjs resume <run-id>
 ```
 
 For throwaway experiments, isolate runtime output:

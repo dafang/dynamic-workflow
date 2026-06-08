@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +12,7 @@ import type { WorkflowPlan } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
 const binPath = path.resolve("bin/dw.mjs");
+const skillDir = path.resolve("skills/dynamic-workflow");
 
 test("edge validation covers empty plan, invalid yaml, invalid json, duplicate ids, cycles, missing deps, unsupported profile and backend", async () => {
   assert.equal(validatePlan({ schema_version: "dynamic_workflow/run/v1", workflow_id: "empty", steps: [] }).ok, false);
@@ -109,7 +110,36 @@ test("run_if false skips dependent step and downstream can proceed", async () =>
 });
 
 test("skill payload excludes runtime artifacts", async () => {
-  const entries = await readdir(path.resolve("skills/dynamic-workflow"));
+  const entries = await readdir(skillDir);
   assert.ok(entries.includes("SKILL.md"));
   assert.ok(!entries.includes(".dynamic-workflow"));
+});
+
+test("skill bundled plan template is the documented authoring base and validates", async () => {
+  const templatePath = path.join(skillDir, "templates/plan.yaml");
+  const skillText = await readFile(path.join(skillDir, "SKILL.md"), "utf8");
+  assert.match(skillText, /<skill_dir>\/templates\/plan\.yaml/);
+  assert.doesNotMatch(skillText, /based on `templates\/plan\.yaml`/);
+
+  const valid = await execFileAsync("node", [binPath, "validate", templatePath]);
+  assert.match(valid.stdout, /valid dwf_example steps=3/);
+
+  const compiled = await execFileAsync("node", [binPath, "compile", templatePath]);
+  assert.match(compiled.stdout, /"workflow_id": "dwf_example"/);
+  assert.match(compiled.stdout, /"step_id": "classify"/);
+});
+
+test("skill dw wrapper resolves the repository runtime from the installed skill path", async () => {
+  const wrapperPath = path.join(skillDir, "scripts/dw");
+  const result = await execFileAsync(wrapperPath, ["validate", path.join(skillDir, "templates/plan.yaml")]);
+  assert.match(result.stdout, /valid dwf_example steps=3/);
+
+  const installRoot = await mkdtemp(path.join(os.tmpdir(), "dw-skill-install-"));
+  const installedSkill = path.join(installRoot, "dynamic-workflow");
+  await symlink(skillDir, installedSkill);
+  const installedResult = await execFileAsync(path.join(installedSkill, "scripts/dw"), [
+    "validate",
+    path.join(installedSkill, "templates/plan.yaml")
+  ]);
+  assert.match(installedResult.stdout, /valid dwf_example steps=3/);
 });

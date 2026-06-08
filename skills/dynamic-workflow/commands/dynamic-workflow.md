@@ -12,13 +12,14 @@ Argument behavior:
 
 Execution flow for new tasks:
 
-1. Resolve the package root.
-2. Resolve or create the plan.
-3. Run `node bin/dw.mjs validate <plan>` and fix validation errors before execution.
-4. Run `node bin/dw.mjs compile <plan>` and show a concise manifest summary.
-5. Execute with `node bin/dw.mjs run <plan>`.
+1. Resolve the skill directory containing `SKILL.md`, and the package root containing `bin/dw.mjs`.
+2. Resolve or create the plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, use `<skill_dir>/references/plan.md`.
+3. Run `node <package_root>/bin/dw.mjs validate <plan>` and fix validation errors before execution.
+4. Run `node <package_root>/bin/dw.mjs compile <plan>` and show a concise manifest summary.
+5. Execute with `node <package_root>/bin/dw.mjs run <plan>`.
 6. Preserve all `DW_*` markers in the transcript.
 7. Run `status`, `review`, and `summarize` for the resulting run id.
-8. For long autonomous execution, keep the same command lifecycle. If the host requires a `/goal` wrapper for unattended execution, create it as an internal continuation contract whose success condition requires `DW_RUN_COMPLETE`; do not turn it into an extra manual user step.
+8. If the package root cannot be resolved, try `<skill_dir>/scripts/dw`; if that also fails, report the missing runtime instead of reading source files to reconstruct the schema.
+9. For long autonomous execution, keep the same command lifecycle. If the host requires a `/goal` wrapper for unattended execution, create it as an internal continuation contract whose success condition requires `DW_RUN_COMPLETE`; do not turn it into an extra manual user step.
 
 Output: plan path when relevant, run id, run directory, transcript markers, review status, summary, and next resume/status command when useful.

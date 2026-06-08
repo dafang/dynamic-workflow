@@ -9,12 +9,15 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 
 ## Required Flow
 
-1. Resolve the package root by locating `package.json` or this skill directory.
-2. Write or select a typed plan based on `templates/plan.yaml`; when authoring non-trivial plans, use `references/plan.md` for the supported step types and fields.
-3. Run `node bin/dw.mjs validate <plan>` and fix structured validation errors before execution.
-4. Run `node bin/dw.mjs compile <plan>` when the user needs a manifest review.
-5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `node bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
-6. Use `status`, `review`, `resume`, and `summarize` commands rather than reading runtime internals directly.
+1. Resolve two paths separately:
+   - Skill directory: the directory containing this `SKILL.md`.
+   - Package root: the repository/runtime root containing `package.json` and `bin/dw.mjs`.
+2. Write or select a typed plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, read `<skill_dir>/references/plan.md` for the supported step types and fields.
+3. Run `node <package_root>/bin/dw.mjs validate <plan>` and fix structured validation errors before execution.
+4. Run `node <package_root>/bin/dw.mjs compile <plan>` and show a concise manifest/risk summary.
+5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `node <package_root>/bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
+6. Run `status`, `review`, and `summarize` for the resulting run id. Use `resume` when continuing an existing run.
+7. If the package root cannot be resolved from the skill install, try `<skill_dir>/scripts/dw`; if that also cannot find the runtime, report the missing runtime path instead of reading `src/` to infer behavior.
 
 ## Safety Rules
 
@@ -23,6 +26,7 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 - Runtime artifacts default to `.dynamic-workflow/runs/<run_id>/`; when `--root <dir>` is passed, artifacts are written under `<dir>/runs/<run_id>/`.
 - Command prompts may call the CLI or scripts wrapping the CLI, but must not duplicate divergent runtime logic.
 - Summaries must omit secrets, raw internal prompts, token/debug details, and unnecessary local paths.
+- Do not read runtime source files to infer the plan schema; use `<skill_dir>/templates/plan.yaml` and `<skill_dir>/references/plan.md`.
 
 ## Output Contract
 

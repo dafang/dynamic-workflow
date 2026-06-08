@@ -1,5 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if command -v realpath >/dev/null 2>&1; then
+  SCRIPT_DIR=$(dirname -- "$(realpath "$0")")
+fi
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
+if [ ! -f "$ROOT/bin/dw.mjs" ]; then
+  echo "dynamic-workflow runtime not found at $ROOT/bin/dw.mjs" >&2
+  echo "Install this skill as a symlink to the repository, or run node <dynamic-workflow-repo>/bin/dw.mjs directly." >&2
+  exit 2
+fi
 exec node "$ROOT/bin/dw.mjs" "$@"
