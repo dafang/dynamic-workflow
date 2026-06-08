@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { listPermissionProfiles, listStepTypes, validatePlan } from "../src/index.js";
@@ -170,4 +171,14 @@ test("registry includes the first-step set and permission profiles", () => {
       "synthesizer"
     ]
   );
+});
+
+test("skill plan reference documents registered step types and permission profiles", async () => {
+  const reference = await readFile("skills/dynamic-workflow/references/plan.md", "utf8");
+  for (const entry of listStepTypes()) {
+    assert.ok(reference.includes(`\`${entry.type}\``), `Missing step type ${entry.type} in plan reference.`);
+  }
+  for (const profile of listPermissionProfiles()) {
+    assert.ok(reference.includes(`\`${profile.name}\``), `Missing permission profile ${profile.name} in plan reference.`);
+  }
 });

@@ -1,4 +1,5 @@
 schema_version: dynamic_workflow/run/v1
+# Full authoring reference: skills/dynamic-workflow/references/plan.md
 workflow_id: dwf_example
 kind: mixed
 backend: current

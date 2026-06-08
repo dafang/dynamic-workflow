@@ -216,6 +216,8 @@ Important fields:
 - `permission_profile`: optional explicit profile; defaults come from the registry.
 - `input.resource_scope`: optional lock scope used by conflict detection.
 
+For the complete plan authoring contract, including every supported step type and permission profile, see `skills/dynamic-workflow/references/plan.md`.
+
 ## Supported Workflow Modes
 
 ### Fan-out And Synthesize

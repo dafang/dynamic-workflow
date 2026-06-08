@@ -10,7 +10,7 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 ## Required Flow
 
 1. Resolve the package root by locating `package.json` or this skill directory.
-2. Write or select a typed plan based on `templates/plan.yaml`.
+2. Write or select a typed plan based on `templates/plan.yaml`; when authoring non-trivial plans, use `references/plan.md` for the supported step types and fields.
 3. Run `node bin/dw.mjs validate <plan>` and fix structured validation errors before execution.
 4. Run `node bin/dw.mjs compile <plan>` when the user needs a manifest review.
 5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `node bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
