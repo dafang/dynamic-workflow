@@ -1,0 +1,24 @@
+import { runWorkflow } from "../runtime.js";
+import { readPlanFile, parseRootFlag, type CommandContext } from "./common.js";
+
+export async function runCommand(args: string[], context: CommandContext): Promise<number> {
+  const { rootDir, rest } = parseRootFlag(args);
+  const [planPath] = rest;
+  if (!planPath) {
+    context.stderr.write("Usage: dw run <plan> [--root <dir>]\n");
+    return 2;
+  }
+  try {
+    const options = rootDir === undefined ? {} : { rootDir };
+    const result = await runWorkflow(await readPlanFile(planPath), options);
+    context.stdout.write(`DW_RUN_START ${result.record.run_id}\n`);
+    for (const marker of result.markers) {
+      context.stdout.write(`${marker}\n`);
+    }
+    context.stdout.write(`run_dir ${result.record.run_dir}\n`);
+    return result.audit.ok ? 0 : 1;
+  } catch (error) {
+    context.stderr.write(`${(error as Error).message}\n`);
+    return 1;
+  }
+}

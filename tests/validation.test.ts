@@ -1,0 +1,173 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { listPermissionProfiles, listStepTypes, validatePlan } from "../src/index.js";
+import type { WorkflowPlan } from "../src/index.js";
+
+function validPlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPlan {
+  return {
+    schema_version: "dynamic_workflow/run/v1",
+    workflow_id: "dwf_validation_test",
+    kind: "mixed",
+    budget: {
+      max_steps: 20,
+      max_subagents: 8,
+      max_rounds: 3
+    },
+    steps: [
+      {
+        step_id: "classify",
+        type: "agent.classify",
+        permission_profile: "classifier",
+        input: { prompt: "Classify request" },
+        depends_on: []
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        permission_profile: "reviewer_readonly",
+        input: { prompt: "Review output" },
+        depends_on: ["classify"]
+      }
+    ],
+    ...overrides
+  };
+}
+
+function expectError(plan: unknown, code: string): void {
+  const result = validatePlan(plan);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === code), JSON.stringify(result.errors));
+}
+
+test("validates a canonical plan", () => {
+  const result = validatePlan(validPlan({ backend: "current" }));
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.steps.length, 2);
+});
+
+test("normalizes docs sample style plan.steps", () => {
+  const plan = validPlan();
+  const result = validatePlan({
+    schema_version: plan.schema_version,
+    workflow_id: plan.workflow_id,
+    kind: plan.kind,
+    plan: {
+      steps: plan.steps
+    }
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.steps[0]?.step_id, "classify");
+});
+
+test("rejects unsupported schema versions", () => {
+  expectError(validPlan({ schema_version: "dynamic_workflow/run/v0" as "dynamic_workflow/run/v1" }), "unsupported_schema_version");
+});
+
+test("rejects duplicate step ids", () => {
+  const plan = validPlan();
+  expectError({ ...plan, steps: [plan.steps[0], plan.steps[0]] }, "duplicate_step_id");
+});
+
+test("rejects missing dependencies and run_if references", () => {
+  const plan = validPlan({
+    steps: [
+      {
+        step_id: "fix",
+        type: "agent.execute",
+        depends_on: ["missing"],
+        run_if: { step: "other_missing", output_path: "blocking.length", op: ">", value: 0 }
+      }
+    ]
+  });
+  expectError(plan, "unknown_dependency");
+  expectError(plan, "unknown_run_if_step");
+});
+
+test("rejects dependency cycles", () => {
+  expectError(
+    validPlan({
+      steps: [
+        { step_id: "a", type: "agent.review", depends_on: ["b"] },
+        { step_id: "b", type: "agent.review", depends_on: ["a"] }
+      ]
+    }),
+    "dependency_cycle"
+  );
+});
+
+test("rejects unsupported step types and permission profiles", () => {
+  expectError(
+    validPlan({
+      steps: [{ step_id: "shell", type: "shell.run" as "agent.execute", depends_on: [] }]
+    }),
+    "unsupported_step_type"
+  );
+  expectError(
+    validPlan({
+      steps: [{ step_id: "review", type: "agent.review", permission_profile: "writer" as "reviewer_readonly", depends_on: [] }]
+    }),
+    "unsupported_permission_profile"
+  );
+});
+
+test("rejects explicit external backends", () => {
+  expectError(validPlan({ backend: "codex" as "current" }), "unsupported_backend");
+  expectError(
+    validPlan({
+      steps: [{ step_id: "run", type: "agent.execute", backend: "claude" as "current", depends_on: [] }]
+    }),
+    "unsupported_backend"
+  );
+});
+
+test("rejects invalid workflow loops", () => {
+  expectError(
+    validPlan({
+      steps: [{ step_id: "loop", type: "workflow.loop", input: { max_rounds: 3 }, depends_on: [] }]
+    }),
+    "invalid_loop"
+  );
+});
+
+test("rejects budgets exceeding host maximums", () => {
+  expectError(validPlan({ budget: { max_steps: 9999 } }), "budget_exceeds_host_limit");
+  expectError(
+    validPlan({
+      steps: [{ step_id: "run", type: "agent.execute", budget: { max_tokens: 2_000_000 }, depends_on: [] }]
+    }),
+    "budget_exceeds_host_limit"
+  );
+});
+
+test("registry includes the first-step set and permission profiles", () => {
+  const stepTypes = listStepTypes().map((entry) => entry.type).sort();
+  assert.deepEqual(stepTypes, [
+    "agent.classify",
+    "agent.execute",
+    "agent.filter",
+    "agent.generate",
+    "agent.judge_pair",
+    "agent.review",
+    "agent.synthesize",
+    "command.verify",
+    "human.approval",
+    "workflow.include",
+    "workflow.loop",
+    "workflow.tournament"
+  ]);
+  assert.deepEqual(
+    listPermissionProfiles()
+      .map((entry) => entry.name)
+      .sort(),
+    [
+      "classifier",
+      "command_verifier",
+      "executor_writer",
+      "human_approval",
+      "research",
+      "reviewer_readonly",
+      "synthesizer"
+    ]
+  );
+});

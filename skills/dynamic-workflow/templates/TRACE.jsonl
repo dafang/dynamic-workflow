@@ -1,0 +1,4 @@
+{"event":"workflow_created","run_id":"<run_id>","timestamp":"<iso8601>","data":{"workflow_id":"<workflow_id>"}}
+{"event":"step_started","run_id":"<run_id>","step_id":"<step_id>","timestamp":"<iso8601>"}
+{"event":"step_succeeded","run_id":"<run_id>","step_id":"<step_id>","timestamp":"<iso8601>","data":{"summary":"<summary>"}}
+{"event":"workflow_completed","run_id":"<run_id>","timestamp":"<iso8601>"}

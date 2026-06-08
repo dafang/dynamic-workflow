@@ -1,0 +1,56 @@
+schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_example_001
+scope_id: project_example
+kind: build_capabilities
+status: queued
+source:
+  channel: chat
+  conversation_id: conv_example
+  user_id: user_example
+request: "为当前项目新增数据导入、摘要生成和结果通知三个能力，并更新操作入口。"
+plan:
+  steps:
+    - step_id: build_data_import
+      type: capability.build
+      title: 构建数据导入能力
+      input:
+        request: "新增能力：接收用户上传的数据文件，校验字段并生成结构化输入。"
+      depends_on: []
+
+    - step_id: build_summary_generation
+      type: capability.build
+      title: 构建摘要生成能力
+      input:
+        request: "新增能力：根据结构化输入生成摘要、风险点和下一步建议。"
+      depends_on: []
+
+    - step_id: build_notification
+      type: capability.build
+      title: 构建结果通知能力
+      input:
+        request: "新增能力：把执行结果整理成适合发送到协作渠道的通知文案。"
+      depends_on: []
+
+    - step_id: update_entry_ui
+      type: ui.update
+      title: 更新操作入口
+      input:
+        request: "展示数据导入、摘要生成和结果通知三个能力入口。"
+      depends_on:
+        - build_data_import
+        - build_summary_generation
+        - build_notification
+
+    - step_id: verify_capabilities
+      type: capability.smoke_verify
+      title: 验证新增能力
+      input:
+        capability_refs:
+          - from_step: build_data_import
+          - from_step: build_summary_generation
+          - from_step: build_notification
+      depends_on:
+        - build_data_import
+        - build_summary_generation
+        - build_notification
+

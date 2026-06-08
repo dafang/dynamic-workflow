@@ -1,0 +1,27 @@
+{
+  "name": "dynamic-workflow",
+  "version": "0.1.0",
+  "description": "Typed dynamic workflow runtime and skill package.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "dw": "./bin/dw.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/tests/**/*.test.js",
+    "lint": "node scripts/lint.mjs",
+    "format:check": "node scripts/lint.mjs --format-check"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}

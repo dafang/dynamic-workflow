@@ -1,0 +1,14 @@
+schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_fixture_happy
+kind: mixed
+steps:
+  - step_id: execute
+    type: agent.execute
+    depends_on: []
+  - step_id: verify
+    type: command.verify
+    depends_on:
+      - execute
+    input:
+      commands:
+        - node --version

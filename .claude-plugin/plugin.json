@@ -1,0 +1,6 @@
+{
+  "name": "dynamic-workflow",
+  "version": "0.1.0",
+  "description": "Typed dynamic workflow runtime and skill package.",
+  "skills": "./skills/"
+}

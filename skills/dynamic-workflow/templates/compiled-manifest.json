@@ -1,0 +1,20 @@
+{
+  "manifest_version": "dynamic_workflow/compiled/v1",
+  "workflow_id": "dwf_example",
+  "nodes": [],
+  "dependencies": {},
+  "reverse_dependencies": {},
+  "ready_queue": [],
+  "resource_locks": [],
+  "writer_conflicts": {},
+  "budget_summary": {
+    "declared_steps": 0,
+    "executable_nodes": 0
+  },
+  "original_plan": {
+    "schema_version": "dynamic_workflow/run/v1",
+    "workflow_id": "dwf_example",
+    "kind": "mixed",
+    "steps": []
+  }
+}

@@ -1,0 +1,37 @@
+schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_example
+kind: mixed
+backend: current
+budget:
+  max_steps: 20
+  max_subagents: 8
+  max_rounds: 3
+steps:
+  - step_id: classify
+    type: agent.classify
+    permission_profile: classifier
+    input:
+      prompt: Classify the request into implementation, review, or research.
+    depends_on: []
+
+  - step_id: execute
+    type: agent.execute
+    permission_profile: executor_writer
+    run_if:
+      step: classify
+      output_path: label
+      op: ==
+      value: implementation
+    input:
+      prompt: Execute the focused implementation task.
+    depends_on:
+      - classify
+
+  - step_id: review
+    type: agent.review
+    permission_profile: reviewer_readonly
+    input:
+      prompt: Review the implementation output for bugs and missing tests.
+      review_target: execute
+    depends_on:
+      - execute

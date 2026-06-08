@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status", "summary", "artifacts"],
+  "properties": {
+    "status": { "enum": ["succeeded", "failed", "waiting_user"] },
+    "summary": { "type": "string" },
+    "artifacts": { "type": "array", "items": { "type": "string" } }
+  }
+}

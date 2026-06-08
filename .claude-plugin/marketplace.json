@@ -1,0 +1,8 @@
+{
+  "name": "Dynamic Workflow",
+  "package": "dynamic-workflow",
+  "version": "0.1.0",
+  "description": "Plan, validate, run, review, resume, and summarize typed dynamic workflows.",
+  "author": "dynamic-workflow contributors",
+  "skills": ["dynamic-workflow"]
+}

@@ -1,0 +1,13 @@
+schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_fixture_failed
+kind: mixed
+steps:
+  - step_id: fail
+    type: agent.execute
+    depends_on: []
+    input:
+      force_fail: true
+  - step_id: downstream
+    type: agent.review
+    depends_on:
+      - fail
