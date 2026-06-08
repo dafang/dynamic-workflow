@@ -1,6 +1,6 @@
 ---
 name: dynamic-workflow
-description: Use for complex work that benefits from a typed, auditable workflow with validation, compilation, durable trace, review, resume, and summary commands. Do not use for simple one-step tasks where orchestration costs more than execution.
+description: Use for complex work that benefits from a typed, auditable workflow with validation, compilation, durable trace, review, resume, and summary. The user-facing entry is dynamic-workflow; lifecycle commands are internal phases. Do not use for simple one-step tasks where orchestration costs more than execution.
 ---
 
 # Dynamic Workflow
@@ -13,7 +13,7 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 2. Write or select a typed plan based on `templates/plan.yaml`.
 3. Run `node bin/dw.mjs validate <plan>` and fix structured validation errors before execution.
 4. Run `node bin/dw.mjs compile <plan>` when the user needs a manifest review.
-5. For `/dw-run <task>` or a natural-language run request, continue in one user operation through `node bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
+5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `node bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
 6. Use `status`, `review`, `resume`, and `summarize` commands rather than reading runtime internals directly.
 
 ## Safety Rules

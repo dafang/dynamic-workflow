@@ -56,19 +56,19 @@ npm run build
 Install the skill by symlinking or copying the skill directory after the local build exists:
 
 ```sh
-mkdir -p ~/.codex/skills
-ln -s /path/to/dynamic-workflow/skills/dynamic-workflow ~/.codex/skills/dynamic-workflow
+mkdir -p ~/.agents/skills
+ln -s /path/to/dynamic-workflow/skills/dynamic-workflow ~/.agents/skills/dynamic-workflow
 ```
 
 For a one-way copy instead:
 
 ```sh
-mkdir -p ~/.codex/skills
-rm -rf ~/.codex/skills/dynamic-workflow
-cp -R /path/to/dynamic-workflow/skills/dynamic-workflow ~/.codex/skills/dynamic-workflow
+mkdir -p ~/.agents/skills
+rm -rf ~/.agents/skills/dynamic-workflow
+cp -R /path/to/dynamic-workflow/skills/dynamic-workflow ~/.agents/skills/dynamic-workflow
 ```
 
-Restart Codex after installing or updating the skill.
+Restart Codex after installing or updating the skill. Older local Codex setups may also scan `~/.codex/skills`; current Codex skill docs use `~/.agents/skills`.
 
 ### Claude
 
@@ -76,56 +76,17 @@ Claude users can install with the `.claude-plugin/` manifests when this repo is 
 
 ## Quickstart In Codex Or Claude
 
-After installing the skill, use it the same way you use other agent skills: ask for Dynamic Workflow by name, or use one of the command prompts if your host exposes skill slash commands.
+After installing the skill, use one product entry: `dynamic-workflow`.
 
-Slash commands may not appear when the host does not support skill-provided commands, when the skill was installed as a plain instruction-only directory, when the session was not restarted after install, or when the host only exposes skill invocation through natural language. In those cases, use the natural-language examples below; the agent follows the same workflow.
-
-### Slash Command Flow
-
-Use this when you want to review the plan before execution:
+In Codex, explicitly invoke the skill with `$dynamic-workflow` or pick it from `/skills`:
 
 ```text
-/dw-plan Audit the auth and billing modules for risky data-access bugs.
-Use fan-out reviewers, synthesize the findings, and add a final verify step.
-```
-
-Then run the approved plan. If the last validated plan is unambiguous, no path is needed:
-
-```text
-/dw-run
-```
-
-Inspect the result. If the latest run is unambiguous, no run id is needed:
-
-```text
-/dw-status
-/dw-review
-```
-
-Resume if needed:
-
-```text
-/dw-resume
-```
-
-Use explicit paths or run ids only when there are multiple candidates:
-
-```text
-/dw-run .dynamic-workflow/plans/auth-billing-audit.yaml
-/dw-review dwf_auth_billing_audit_mq123abc
-```
-
-### One-Step Plan And Run
-
-`/dw-run <task>` is the one-step path. It plans, validates, compiles, runs, reviews, and summarizes in one flow:
-
-```text
-/dw-run Fix the flaky checkout total calculation.
+$dynamic-workflow Fix the flaky checkout total calculation.
 Reproduce the failure, implement a focused fix, run the relevant test,
 then run an adversarial review step before the final command.verify.
 ```
 
-The command must complete this sequence in a single user operation: plan -> validate -> compile manifest/risk summary -> run -> status/review/summarize. If you want to approve the plan before execution, use `/dw-plan` first.
+The agent must complete this sequence in a single user operation: plan -> validate -> compile manifest/risk summary -> run -> status/review/summarize.
 
 Natural-language equivalent:
 
@@ -137,10 +98,18 @@ then run an adversarial review step before the final command.verify.
 
 Good fit because the workflow has clear phases: reproduce, fix, verify, review.
 
+If your Codex version exposes local custom prompts, the installed compatibility prompt appears as:
+
+```text
+/prompts:dynamic-workflow Fix the flaky checkout total calculation.
+```
+
+Some hosts may expose a shorter `/dynamic-workflow` alias. The user-facing interface remains one entry; plan, run, status, review, and resume are internal phases.
+
 ### Example: Codebase Audit
 
 ```text
-/dw-plan Review the API gateway, job worker, and database layer for race conditions.
+$dynamic-workflow Review the API gateway, job worker, and database layer for race conditions.
 Use three parallel reviewer steps, synthesize findings, then verify by running the test suite.
 ```
 
@@ -149,7 +118,7 @@ Good fit because fan-out reviewers can inspect different areas independently bef
 ### Example: Research Task
 
 ```text
-/dw-run Compare three approaches for adding offline sync.
+$dynamic-workflow Compare three approaches for adding offline sync.
 Generate candidate designs, run a tournament against correctness/risk/implementation cost,
 then synthesize the recommended plan with tradeoffs and open questions.
 ```
@@ -159,14 +128,14 @@ Good fit because `workflow.tournament` records how candidates were compared inst
 ### Example: Larger Implementation
 
 ```text
-/dw-run Migrate the notifications pipeline from polling to event-driven delivery.
+$dynamic-workflow Migrate the notifications pipeline from polling to event-driven delivery.
 Include classify-and-act for unknown risk areas, a bounded repair loop after review findings,
 and command.verify steps for unit tests, integration tests, and lint.
 ```
 
 Good fit because the workflow needs conditional branches, multiple verification gates, and durable status if the run is interrupted.
 
-### Command Contract
+### Entry Contract
 
 For any of these requests, the agent must:
 
@@ -174,8 +143,8 @@ For any of these requests, the agent must:
 2. Write or select a typed plan.
 3. Run `validate`.
 4. Run `compile` and show a concise manifest summary.
-5. For `/dw-run <task>`, continue without another user command through `run`, `status`, `review`, and `summarize`.
-6. Stop before execution only for `/dw-plan` or explicit plan-only requests.
+5. Continue without another user command through `run`, `status`, `review`, and `summarize`.
+6. Stop before execution only when the user explicitly asks for plan-only review.
 7. Resolve omitted plan paths and run ids from recent context when unambiguous.
 8. Ask one disambiguating question only when multiple recent plans or runs are plausible.
 

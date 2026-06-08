@@ -119,7 +119,7 @@ Known MVP limits:
 
 ## Install Sync Notes
 
-Codex install is usually a symlink or one-way copy into `~/.codex/skills/dynamic-workflow`. After changing the skill payload, verify the local Codex install points at or matches `skills/dynamic-workflow/`.
+Codex install is usually a symlink or one-way copy into `~/.agents/skills/dynamic-workflow`; older local setups may also use `~/.codex/skills/dynamic-workflow`. After changing the skill payload, verify the local Codex install points at or matches `skills/dynamic-workflow/`.
 
 Claude plugin manifests live under `.claude-plugin/`. If this project is published through a plugin flow, keep `package.json`, plugin manifests, changelog/release notes, README version notes, and the shipped skill payload aligned.
 
