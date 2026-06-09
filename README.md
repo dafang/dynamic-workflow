@@ -337,7 +337,9 @@ Safety behavior:
 - Template expressions are rejected because they execute JavaScript.
 - Sequential `agent()` calls after fan-out depend on the previous terminal step; synthesizer calls merge current terminal steps.
 
-Prefer typed YAML/JSON plans for important work. Use the harness for controlled capture tests and ergonomic authoring experiments.
+The next design direction is JS-first authoring with manifest IR execution: JS should express workflow graph and artifact references, while the runtime executes a compiled manifest with explicit dataflow, trace, and resume semantics. See [docs/07-js-first-dataflow-runtime.md](./docs/07-js-first-dataflow-runtime.md).
+
+Until manifest dataflow is implemented, typed YAML/JSON plans remain the executable MVP surface.
 
 ## Runtime Artifacts
 

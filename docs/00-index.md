@@ -6,8 +6,8 @@
 
 - dynamic workflow 的价值不在“多开 agent”，而在为复杂任务临时生成一套更合适的 harness。
 - harness 负责结构：如何拆任务、哪些 subagent 干活、哪些 subagent 审核、结果如何汇总、失败如何停止。
-- JS 这类语言可以作为可编排宿主，但产品运行时更适合使用 typed workflow plan。
-- 产品运行时可以借鉴 dynamic workflow 的编排思想，但不应默认引入任意脚本执行。
+- JS 这类语言适合作为 workflow authoring DSL，但不能直接拥有系统能力。
+- 产品运行时应执行 manifest IR 和 artifact dataflow，而不是依赖 JS call stack 或聊天上下文。
 
 ## 文档列表
 
@@ -17,6 +17,7 @@
 - [04-js-runtime-and-agent-bridge.md](./04-js-runtime-and-agent-bridge.md)：JS runtime 如何隔离执行，以及 `agent()` 如何桥接 Codex / Claude / ACP。
 - [05-skills-and-slash-commands.md](./05-skills-and-slash-commands.md)：如何把 dynamic workflow 包装成给 Codex / Claude 使用的 skills 与 slash commands。
 - [06-typed-plan-runtime.md](./06-typed-plan-runtime.md)：typed plan 如何表达 dynamic workflow 模式，以及如何稳定驱动 agent 执行。
+- [07-js-first-dataflow-runtime.md](./07-js-first-dataflow-runtime.md)：下一阶段的 JS-first authoring、manifest IR、artifact dataflow 和上下文注入设计。
 - [samples/js-harness-pseudocode.js](./samples/js-harness-pseudocode.js)：Claude-style JS harness 伪代码。
 - [samples/typed-plan.yaml](./samples/typed-plan.yaml)：Product-style typed workflow plan 示例。
 
@@ -33,14 +34,14 @@ Claude-style dynamic workflow:
   -> synthesizer 汇总
 ```
 
-Product-style typed dynamic workflow:
+JS-first dataflow dynamic workflow:
 
 ```text
-User-facing Agent 或 Planner 生成 typed plan
-  -> Host 校验 step type / dependency / permission
-  -> Executor 调现有受控 services
-  -> Workflow facts 写入 durable runtime
-  -> status / summary 面向用户展示
+User-facing Agent 或 Planner 生成 workflow.js
+  -> SDK capture graph and artifact refs
+  -> Host 生成 compiled manifest IR
+  -> Runtime 按 manifest 调度并注入 StepContext
+  -> artifacts / trace 支持 review、resume、summarize
 ```
 
 ## 适用判断

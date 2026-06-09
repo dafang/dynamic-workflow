@@ -44,3 +44,10 @@ This file maps the design documents to the 0.1.0 MVP implementation.
 - Implemented: dependencies and `run_if.step` references to control step ids are rewritten to terminal expanded nodes during compilation; compiled manifests fail closed if any dependency or condition references a missing node.
 - Implemented: runtime evaluates `run_if.output_path` against the step output object, so `output_path: "status"` reads the emitted output status.
 - Safe MVP: only `current` backend is executable.
+
+## 07-js-first-dataflow-runtime.md
+
+- Target direction: JS-first authoring captures workflow graph and artifact references, then runtime executes a compiled manifest IR.
+- Deferred: `consumes`, `produces`, `ArtifactRef`, `StepContext`, backend context injection, and manifest v2 are not implemented in 0.1.0.
+- Current limit: `depends_on` controls scheduling order only; downstream steps do not automatically receive upstream artifacts except for `run_if` condition evaluation.
+- Compatibility rule: existing `dynamic_workflow/run/v1` plans continue to run while dataflow fields are added.

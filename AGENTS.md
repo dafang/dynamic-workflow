@@ -56,6 +56,7 @@ Then clean the temp dir, or use a shell `trap`.
 ## Harness Rules
 
 - The JS harness bridge is compile/capture oriented; do not execute generated JavaScript with unrestricted Node permissions.
+- The target JS-first direction is authoring/capture into manifest IR with explicit artifact dataflow; runtime execution and resume must use manifest state, not JS call stack.
 - Keep denied-capability checks conservative. A false rejection is better than a capability escape in executable harness code.
 - Preserve the distinction between prompt text and executable code: comments and string literals should not trip denied-capability checks.
 - Template expressions remain rejected because they execute JavaScript.
