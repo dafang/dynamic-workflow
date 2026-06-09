@@ -60,7 +60,7 @@ const docs = command("collect_docs", {
 const review = agent.review("review_docs", {
   prompt: "Review docs",
   context: {
-    docs: docs.output("$.verify.checks[*].stdout")
+    docs: docs.output("$.output.collection.checks[*].stdout")
   }
 })
 agent.synthesize("summary", {
@@ -74,12 +74,12 @@ agent.synthesize("summary", {
   assert.deepEqual(
     result.plan.steps.map((step) => ({ id: step.step_id, type: step.type, deps: step.depends_on, consumes: step.consumes })),
     [
-      { id: "collect_docs", type: "command.verify", deps: [], consumes: undefined },
+      { id: "collect_docs", type: "command.collect", deps: [], consumes: undefined },
       {
         id: "review_docs",
         type: "agent.review",
         deps: ["collect_docs"],
-        consumes: [{ from: "collect_docs", select: "$.verify.checks[*].stdout", as: "docs" }]
+        consumes: [{ from: "collect_docs", select: "$.output.collection.checks[*].stdout", as: "docs" }]
       },
       {
         id: "summary",
@@ -90,7 +90,7 @@ agent.synthesize("summary", {
     ]
   );
   assert.deepEqual(result.manifest.nodes.find((node) => node.step_id === "review_docs")?.consumes, [
-    { from: "collect_docs", select: "$.verify.checks[*].stdout", as: "docs" }
+    { from: "collect_docs", select: "$.output.collection.checks[*].stdout", as: "docs" }
   ]);
 });
 

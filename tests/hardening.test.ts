@@ -123,7 +123,7 @@ test("skill bundled plan template is the documented authoring base and validates
   assert.doesNotMatch(skillText, /based on `templates\/plan\.yaml`/);
 
   const valid = await execFileAsync("node", [binPath, "validate", templatePath]);
-  assert.match(valid.stdout, /valid dwf_example steps=3/);
+  assert.match(valid.stdout, /valid dwf_example steps=4/);
 
   const compiled = await execFileAsync("node", [binPath, "compile", templatePath]);
   assert.match(compiled.stdout, /"workflow_id": "dwf_example"/);
@@ -136,7 +136,7 @@ test("skill bundled plan template is the documented authoring base and validates
 test("skill dw wrapper resolves bundled runtime from copied and symlinked installs", async () => {
   const wrapperPath = path.join(skillDir, "scripts/dw");
   const result = await execFileAsync(wrapperPath, ["validate", path.join(skillDir, "templates/plan.yaml")]);
-  assert.match(result.stdout, /valid dwf_example steps=3/);
+  assert.match(result.stdout, /valid dwf_example steps=4/);
 
   const installRoot = await mkdtemp(path.join(os.tmpdir(), "dw-skill-install-"));
   const installedSkill = path.join(installRoot, "dynamic-workflow");
@@ -145,7 +145,7 @@ test("skill dw wrapper resolves bundled runtime from copied and symlinked instal
     "validate",
     path.join(installedSkill, "templates/plan.yaml")
   ]);
-  assert.match(copiedResult.stdout, /valid dwf_example steps=3/);
+  assert.match(copiedResult.stdout, /valid dwf_example steps=4/);
 
   const linkedSkill = path.join(installRoot, "dynamic-workflow-linked");
   await symlink(skillDir, linkedSkill);
@@ -153,5 +153,5 @@ test("skill dw wrapper resolves bundled runtime from copied and symlinked instal
     "validate",
     path.join(linkedSkill, "templates/plan.yaml")
   ]);
-  assert.match(linkedResult.stdout, /valid dwf_example steps=3/);
+  assert.match(linkedResult.stdout, /valid dwf_example steps=4/);
 });

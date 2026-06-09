@@ -1,4 +1,6 @@
 import { compilePlan } from "../compiler.js";
+import { lintPlan } from "../lints.js";
+import { assertValidPlan } from "../validation.js";
 import { readPlanFile, writeJson } from "./common.js";
 export async function compileCommand(args, context) {
     const [planPath] = args;
@@ -7,7 +9,12 @@ export async function compileCommand(args, context) {
         return 2;
     }
     try {
-        writeJson(context.stdout, compilePlan(await readPlanFile(planPath)));
+        const planInput = await readPlanFile(planPath);
+        const plan = assertValidPlan(planInput);
+        for (const warning of lintPlan(plan)) {
+            context.stderr.write(`warning ${warning.code}${warning.step_id ? ` step=${warning.step_id}` : ""}: ${warning.message}\n`);
+        }
+        writeJson(context.stdout, compilePlan(plan));
         return 0;
     }
     catch (error) {

@@ -1,5 +1,5 @@
 import { type ResourceLock } from "./resources.js";
-import type { JsonObject, RunCondition, StepConsume, StepProduces, StepType, VerificationSpec, WorkflowPlan, WorkflowStep } from "./types.js";
+import type { JsonObject, CommandCollectionSpec, RunCondition, StepConsume, StepProduces, StepType, VerificationSpec, WorkflowPlan, WorkflowStep } from "./types.js";
 export interface CompiledNode {
     step_id: string;
     type: StepType;
@@ -13,6 +13,7 @@ export interface CompiledNode {
     backend: "current";
     run_if?: RunCondition;
     verify?: VerificationSpec;
+    collect?: CommandCollectionSpec;
     resource_locks: ResourceLock[];
     control_origin?: string;
 }

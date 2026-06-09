@@ -63,6 +63,7 @@ export function compilePlan(input, options = {}) {
         assignOptional(node, "produces", step.produces);
         assignOptional(node, "run_if", step.run_if);
         assignOptional(node, "verify", step.verify);
+        assignOptional(node, "collect", step.collect);
         const origin = typeof step.input?.control_origin === "string" ? step.input.control_origin : undefined;
         assignOptional(node, "control_origin", origin);
         return node;

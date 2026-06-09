@@ -120,6 +120,17 @@ export const STEP_REGISTRY = {
         supportsRetry: true,
         defaultTimeoutSeconds: 600
     },
+    "command.collect": {
+        type: "command.collect",
+        description: "Run bounded evidence collection commands and preserve partial results.",
+        defaultPermissionProfile: "command_collector",
+        allowedPermissionProfiles: ["command_collector"],
+        control: false,
+        concurrent: true,
+        mayWrite: false,
+        supportsRetry: true,
+        defaultTimeoutSeconds: 600
+    },
     "human.approval": {
         type: "human.approval",
         description: "Pause for human approval.",

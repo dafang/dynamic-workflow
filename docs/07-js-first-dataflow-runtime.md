@@ -55,7 +55,7 @@ const docs = command("collect_docs", {
 const review = agent.review("review_docs", {
   prompt: "Review README/SKILL/template consistency. Return structured findings.",
   context: {
-    docs: docs.output("$.verify.checks[*].stdout"),
+    docs: docs.output("$.output.collection.checks[*].stdout"),
   },
 });
 
@@ -89,7 +89,7 @@ manifest 应该显式区分调度依赖和数据依赖：
       "consumes": [
         {
           "from": "collect_docs",
-          "select": "$.verify.checks[*].stdout",
+          "select": "$.output.collection.checks[*].stdout",
           "as": "docs",
           "required": true,
           "max_bytes": 20000
@@ -154,7 +154,7 @@ Agent backends receive:
 - output schema
 - permission profile
 
-The current backend records selected context aliases and source metadata in `agent.*` artifacts. `command.verify` remains command-driven; command templating from context is not implemented.
+The current backend records selected context aliases and source metadata in `agent.*` artifacts. `command.collect` is the default command shape for evidence gathering, while strict `command.verify` remains command-driven for tests, build, lint, and final acceptance. Command templating from context is not implemented.
 
 ## 6. Produces
 
@@ -164,7 +164,7 @@ Every step already writes `steps/<step_id>.json`. The next version should let au
 const docs = command("collect_docs", {
   run: ["sed -n '1,220p' README.md"],
   produces: {
-    checks: "$.verify.checks",
+    checks: "$.output.collection.checks",
   },
 });
 ```
@@ -175,8 +175,8 @@ Compiled form:
 {
   "produces": {
     "checks": {
-      "select": "$.verify.checks",
-      "schema": "command_checks/v1"
+      "select": "$.output.collection.checks",
+      "schema": "command_collection/v1"
     }
   }
 }
@@ -186,7 +186,7 @@ Downstream refs can use either full JSONPath or named outputs:
 
 ```js
 docs.produces("checks")
-docs.output("$.verify.checks[*].stdout")
+docs.output("$.output.collection.checks[*].stdout")
 ```
 
 ## 7. Agent Step Semantics

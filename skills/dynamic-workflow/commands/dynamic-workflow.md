@@ -4,7 +4,7 @@ Run Dynamic Workflow through a single user-facing entry.
 
 Argument behavior:
 
-- If the user provides a task description, complete the full lifecycle in this single command: create a typed plan with explicit `consumes` dataflow where downstream steps need upstream artifacts, validate it, compile it, show a concise manifest/risk summary, run it, then report status/review/summary for the resulting run id.
+- If the user provides a task description, complete the full lifecycle in this single command: create a typed plan with explicit `consumes` dataflow where downstream steps need upstream artifacts, validate it, review warnings, compile it, show a concise manifest/risk summary, run it, then report status/review/summary for the resulting run id.
 - If the user provides a plan path, validate, compile, run, then report status/review/summary for that plan.
 - If the user provides a run id or asks for status, review, summary, or resume, resolve the run id and perform the requested lifecycle action.
 - If the user provides no argument, resolve the most recent active workflow from this conversation or runtime root. Continue, review, summarize, or report status based on the latest state. Ask one short disambiguating question only when multiple candidates exist.
@@ -13,9 +13,9 @@ Argument behavior:
 Execution flow for new tasks:
 
 1. Resolve the skill directory containing `SKILL.md`.
-2. Resolve or create the plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, use `<skill_dir>/references/plan.md`. Prefer command -> review -> synthesize dataflow over command-only ordered checklists.
-3. Run `<skill_dir>/scripts/dw validate <plan>` and fix validation errors before execution.
-4. Run `<skill_dir>/scripts/dw compile <plan>` and show a concise manifest summary.
+2. Resolve or create the plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, use `<skill_dir>/references/plan.md`. Prefer collect -> review -> synthesize -> verify dataflow over command-only ordered checklists.
+3. Run `<skill_dir>/scripts/dw validate <plan>` and fix validation errors before execution. If warnings mention broad scans, nested shell, or optional searches under `command.verify`, revise the plan before running unless the user explicitly asked for plan-only inspection.
+4. Run `<skill_dir>/scripts/dw compile <plan>` and show a concise manifest summary plus any warnings.
 5. Execute with `<skill_dir>/scripts/dw run <plan>`.
 6. Preserve all `DW_*` markers in the transcript.
 7. Run `status`, `review`, and `summarize` for the resulting run id.

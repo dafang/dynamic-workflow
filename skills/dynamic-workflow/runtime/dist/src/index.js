@@ -7,6 +7,7 @@ export { listPermissionProfiles, PERMISSION_PROFILES } from "./permissions.js";
 export { listStepTypes, STEP_REGISTRY } from "./registry.js";
 export { HOST_LIMITS } from "./schema.js";
 export { assertValidPlan, validatePlan } from "./validation.js";
+export { lintPlan } from "./lints.js";
 export { compilePlan } from "./compiler.js";
 export { auditRun } from "./audit.js";
 export { CurrentBackend } from "./backends/current.js";

@@ -34,7 +34,11 @@ export async function buildStepContext(params) {
             selected_bytes: clipped.selectedBytes
         });
     }
-    return { run_id: params.runId, step_id: params.node.step_id, inputs, sources };
+    const context = { run_id: params.runId, step_id: params.node.step_id, inputs, sources };
+    if (params.trace) {
+        context.trace = params.trace;
+    }
+    return context;
 }
 export function selectArtifactValue(value, selector) {
     if (selector === "$")

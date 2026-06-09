@@ -17,7 +17,8 @@ export async function summarizeCommand(args, context) {
                 step_id: step.step_id,
                 state: step.state,
                 summary: step.summary,
-                context_sources: readContextSourceSummary(artifact)
+                context_sources: readContextSourceSummary(artifact),
+                collection_gaps: readCollectionGaps(artifact)
             };
         }));
         writeJson(context.stdout, sanitizeForUser({
@@ -32,6 +33,29 @@ export async function summarizeCommand(args, context) {
         context.stderr.write(`${error.message}\n`);
         return 1;
     }
+}
+function readCollectionGaps(artifact) {
+    const output = artifact?.output;
+    if (typeof output !== "object" || output === null || Array.isArray(output))
+        return [];
+    const collection = output.collection;
+    if (typeof collection !== "object" || collection === null || Array.isArray(collection))
+        return [];
+    const gaps = collection.gaps;
+    if (!Array.isArray(gaps))
+        return [];
+    return gaps.flatMap((gap) => {
+        if (typeof gap !== "object" || gap === null || Array.isArray(gap))
+            return [];
+        return [{
+                id: gap.id,
+                exit_code: gap.exit_code,
+                timed_out: gap.timed_out,
+                failure_category: gap.failure_category,
+                soft_failed: gap.soft_failed,
+                repair_hint: gap.repair_hint
+            }];
+    });
 }
 function readContextSourceSummary(artifact) {
     const sources = artifact?.output;

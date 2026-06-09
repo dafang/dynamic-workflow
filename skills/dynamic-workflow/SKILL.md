@@ -14,9 +14,10 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
    - A source repository checkout is only a development fallback, not a user-install requirement.
 2. Write or select a typed plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, read `<skill_dir>/references/plan.md` for the supported step types and fields.
    - Prefer explicit dataflow when a downstream `agent.review`, `agent.synthesize`, or `agent.execute` needs upstream evidence: add `consumes` entries rather than relying on `depends_on` alone.
+   - Use `command.collect` for evidence gathering and optional scans. Use strict `command.verify` for tests, builds, lint, schema checks, and final acceptance.
    - Treat JS-first examples with `command(...)`, `agent.review(...)`, and `StepHandle.output(...)` as authoring guidance that captures to manifest IR; do not execute arbitrary JavaScript.
-3. Run `<skill_dir>/scripts/dw validate <plan>` and fix structured validation errors before execution.
-4. Run `<skill_dir>/scripts/dw compile <plan>` and show a concise manifest/risk summary.
+3. Run `<skill_dir>/scripts/dw validate <plan>` and fix structured validation errors before execution. Read warning lines too; revise brittle command shapes such as broad `rg`, nested shell, or optional searches under `command.verify`.
+4. Run `<skill_dir>/scripts/dw compile <plan>` and show a concise manifest/risk summary, including warnings when present.
 5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `<skill_dir>/scripts/dw run <plan>`, then preserve the `DW_*` transcript markers.
 6. Run `status`, `review`, and `summarize` for the resulting run id. Use `resume` when continuing an existing run.
 7. If `<skill_dir>/scripts/dw` cannot find the bundled runtime, report the missing runtime path instead of reading `src/` to infer behavior.
@@ -30,6 +31,7 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 - Command prompts may call the CLI or scripts wrapping the CLI, but must not duplicate divergent runtime logic.
 - Summaries must omit secrets, raw internal prompts, token/debug details, and unnecessary local paths.
 - Do not read runtime source files to infer the plan schema; use `<skill_dir>/templates/plan.yaml` and `<skill_dir>/references/plan.md`.
+- Do not mutate a workflow another agent is currently running. Inspect `status`, `review`, `summarize`, and trace artifacts first; propose a repair plan or resume only after the running session is no longer active or the user asks for intervention.
 
 ## Output Contract
 

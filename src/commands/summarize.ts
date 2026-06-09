@@ -20,7 +20,8 @@ export async function summarizeCommand(args: string[], context: CommandContext):
           step_id: step.step_id,
           state: step.state,
           summary: step.summary,
-          context_sources: readContextSourceSummary(artifact)
+          context_sources: readContextSourceSummary(artifact),
+          collection_gaps: readCollectionGaps(artifact)
         };
       })
     );
@@ -35,6 +36,26 @@ export async function summarizeCommand(args: string[], context: CommandContext):
     context.stderr.write(`${(error as Error).message}\n`);
     return 1;
   }
+}
+
+function readCollectionGaps(artifact: JsonObject | undefined): JsonObject[] {
+  const output = artifact?.output;
+  if (typeof output !== "object" || output === null || Array.isArray(output)) return [];
+  const collection = output.collection;
+  if (typeof collection !== "object" || collection === null || Array.isArray(collection)) return [];
+  const gaps = collection.gaps;
+  if (!Array.isArray(gaps)) return [];
+  return gaps.flatMap((gap) => {
+    if (typeof gap !== "object" || gap === null || Array.isArray(gap)) return [];
+    return [{
+      id: gap.id,
+      exit_code: gap.exit_code,
+      timed_out: gap.timed_out,
+      failure_category: gap.failure_category,
+      soft_failed: gap.soft_failed,
+      repair_hint: gap.repair_hint
+    } as JsonObject];
+  });
 }
 
 function readContextSourceSummary(artifact: JsonObject | undefined): JsonObject[] {

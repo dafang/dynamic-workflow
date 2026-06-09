@@ -58,6 +58,14 @@ export const PERMISSION_PROFILES: Record<PermissionProfileName, PermissionProfil
     shell: "verify-only",
     mayReadUntrustedInput: false
   },
+  command_collector: {
+    name: "command_collector",
+    description: "Runs bounded evidence collection commands and records partial results.",
+    allowedTools: ["terminal.collect", "artifact.write"],
+    canWrite: false,
+    shell: "verify-only",
+    mayReadUntrustedInput: true
+  },
   human_approval: {
     name: "human_approval",
     description: "Pauses execution until a human approves, rejects, or revises a step.",

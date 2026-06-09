@@ -142,6 +142,25 @@ Other `verify` fields:
 - `required_artifacts`: array of artifact names or paths expected from the step.
 - `output_schema`: JSON object describing expected output shape.
 
+`command.collect` gathers evidence without treating explicitly optional misses as blockers:
+
+```yaml
+- step_id: collect_sources
+  type: command.collect
+  depends_on: []
+  collect:
+    commands:
+      - id: py_defs
+        run: "rg --glob '*.py' --glob '!{.venv,.dynamic-workflow,__pycache__}/**' 'def |class ' ."
+        allow_exit_codes: [0, 1]
+        soft_fail: true
+        timeout_seconds: 30
+```
+
+Collection outputs are written under `$.output.collection.checks` and gaps under
+`$.output.collection.gaps`. Downstream agent steps should consume collection
+evidence explicitly with `consumes`.
+
 ## Registered Step Types
 
 | Type | Purpose | Default profile | Allowed profiles | Control | Writes |
@@ -156,6 +175,7 @@ Other `verify` fields:
 | `workflow.include` | Compile an allowlisted built-in workflow into the graph. | `synthesizer` | `synthesizer` | yes | no |
 | `workflow.loop` | Compile a bounded loop into resumable rounds. | `synthesizer` | `synthesizer` | yes | no |
 | `workflow.tournament` | Compile candidate comparisons into pairwise judge steps. | `synthesizer` | `synthesizer` | yes | no |
+| `command.collect` | Run evidence collection commands and preserve partial results. | `command_collector` | `command_collector` | no | no |
 | `command.verify` | Run verification commands and capture structured results. | `command_verifier` | `command_verifier` | no | no |
 | `human.approval` | Pause execution until a human approves, rejects, or revises a step. | `human_approval` | `human_approval` | no | no |
 
@@ -251,6 +271,7 @@ At compile time:
 - `synthesizer`: artifact read/write for merging outputs.
 - `research`: project and external reference reading without workspace mutation.
 - `command_verifier`: verification shell commands only.
+- `command_collector`: bounded evidence collection shell commands only.
 - `human_approval`: user approval only.
 
 Permission profiles are validated against step type allowlists. Prompt text cannot grant extra permissions.
@@ -263,5 +284,5 @@ Permission profiles are validated against step type allowlists. Prompt text cann
 - Control steps compile before runtime; runtime executes concrete nodes.
 - `workflow.loop` is bounded and does not short-circuit early yet.
 - `human.approval` enters `waiting_user`; a full approve/reject/revise resume workflow is still host-dependent.
-- `command.verify` commands run through `sh -c` and capture the last 2000 characters of stdout/stderr.
+- `command.verify` and `command.collect` commands run through `sh -c` and capture capped stdout/stderr in artifacts.
 - Step outputs are sanitized before being written to user-facing artifacts; secret, token, password, raw prompt, internal prompt, and debug keys are removed recursively.

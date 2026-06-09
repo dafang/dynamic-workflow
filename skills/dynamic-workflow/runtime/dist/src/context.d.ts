@@ -6,6 +6,7 @@ interface BuildContextParams {
     runId: string;
     node: CompiledNode;
     steps: Record<string, StepRuntimeState>;
+    trace?: StepContext["trace"];
 }
 export declare function buildStepContext(params: BuildContextParams): Promise<StepContext>;
 export declare function selectArtifactValue(value: JsonValue, selector: string): JsonValue | undefined;

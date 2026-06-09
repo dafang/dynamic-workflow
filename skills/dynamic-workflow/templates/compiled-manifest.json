@@ -4,24 +4,36 @@
   "nodes": [
     {
       "step_id": "collect_docs",
-      "type": "command.verify",
-      "input": {
-        "commands": ["sed -n '1,120p' README.md"]
-      },
+      "type": "command.collect",
+      "input": {},
       "depends_on": [],
-      "reverse_dependencies": ["review_docs"],
+      "reverse_dependencies": [
+        "review_docs"
+      ],
+      "permission_profile": "command_collector",
+      "backend": "current",
+      "resource_locks": [
+        {
+          "step_id": "collect_docs",
+          "scope": "workspace",
+          "mode": "read"
+        }
+      ],
       "produces": {
         "checks": {
-          "select": "$.verify.checks",
-          "schema": "command_checks/v1"
+          "select": "$.output.collection.checks",
+          "schema": "command_collection/v1"
         }
       },
-      "permission_profile": "command_verifier",
-      "backend": "current",
-      "verify": {
-        "commands": ["sed -n '1,120p' README.md"]
-      },
-      "resource_locks": []
+      "collect": {
+        "commands": [
+          {
+            "run": "sed -n '1,120p' README.md",
+            "id": "readme_intro",
+            "timeout_seconds": 10
+          }
+        ]
+      }
     },
     {
       "step_id": "review_docs",
@@ -29,20 +41,30 @@
       "input": {
         "prompt": "Review collected documentation for inconsistencies and missing evidence."
       },
-      "depends_on": ["collect_docs"],
-      "reverse_dependencies": ["summarize"],
+      "depends_on": [
+        "collect_docs"
+      ],
+      "reverse_dependencies": [
+        "summarize"
+      ],
+      "permission_profile": "reviewer_readonly",
+      "backend": "current",
+      "resource_locks": [
+        {
+          "step_id": "review_docs",
+          "scope": "workspace",
+          "mode": "read"
+        }
+      ],
       "consumes": [
         {
           "from": "collect_docs",
-          "select": "$.verify.checks[*].stdout",
+          "select": "$.output.collection.checks[*].stdout",
           "as": "docs",
           "required": true,
           "max_bytes": 20000
         }
-      ],
-      "permission_profile": "reviewer_readonly",
-      "backend": "current",
-      "resource_locks": []
+      ]
     },
     {
       "step_id": "summarize",
@@ -50,36 +72,113 @@
       "input": {
         "prompt": "Summarize the review result with evidence."
       },
-      "depends_on": ["review_docs"],
-      "reverse_dependencies": [],
+      "depends_on": [
+        "review_docs"
+      ],
+      "reverse_dependencies": [
+        "verify_runtime"
+      ],
+      "permission_profile": "synthesizer",
+      "backend": "current",
+      "resource_locks": [
+        {
+          "step_id": "summarize",
+          "scope": "workspace",
+          "mode": "write"
+        }
+      ],
       "consumes": [
         {
           "from": "review_docs",
           "select": "$.output.status",
           "as": "review_status"
         }
+      ]
+    },
+    {
+      "step_id": "verify_runtime",
+      "type": "command.verify",
+      "input": {},
+      "depends_on": [
+        "summarize"
       ],
-      "permission_profile": "synthesizer",
+      "reverse_dependencies": [],
+      "permission_profile": "command_verifier",
       "backend": "current",
-      "resource_locks": []
+      "resource_locks": [
+        {
+          "step_id": "verify_runtime",
+          "scope": "workspace",
+          "mode": "read"
+        }
+      ],
+      "verify": {
+        "commands": [
+          {
+            "run": "node --version",
+            "id": "node_version",
+            "timeout_seconds": 10
+          }
+        ]
+      }
     }
   ],
   "dependencies": {
     "collect_docs": [],
-    "review_docs": ["collect_docs"],
-    "summarize": ["review_docs"]
+    "review_docs": [
+      "collect_docs"
+    ],
+    "summarize": [
+      "review_docs"
+    ],
+    "verify_runtime": [
+      "summarize"
+    ]
   },
   "reverse_dependencies": {
-    "collect_docs": ["review_docs"],
-    "review_docs": ["summarize"],
-    "summarize": []
+    "collect_docs": [
+      "review_docs"
+    ],
+    "review_docs": [
+      "summarize"
+    ],
+    "summarize": [
+      "verify_runtime"
+    ],
+    "verify_runtime": []
   },
-  "ready_queue": ["collect_docs"],
-  "resource_locks": [],
+  "ready_queue": [
+    "collect_docs"
+  ],
+  "resource_locks": [
+    {
+      "step_id": "collect_docs",
+      "scope": "workspace",
+      "mode": "read"
+    },
+    {
+      "step_id": "review_docs",
+      "scope": "workspace",
+      "mode": "read"
+    },
+    {
+      "step_id": "summarize",
+      "scope": "workspace",
+      "mode": "write"
+    },
+    {
+      "step_id": "verify_runtime",
+      "scope": "workspace",
+      "mode": "read"
+    }
+  ],
   "writer_conflicts": {},
   "budget_summary": {
-    "declared_steps": 3,
-    "executable_nodes": 3
+    "declared_steps": 4,
+    "executable_nodes": 4,
+    "max_steps": 20,
+    "max_subagents": 8,
+    "max_rounds": 3
   },
   "original_plan": {
     "schema_version": "dynamic_workflow/run/v1",
@@ -88,19 +187,86 @@
     "steps": [
       {
         "step_id": "collect_docs",
-        "type": "command.verify",
-        "depends_on": []
+        "type": "command.collect",
+        "depends_on": [],
+        "permission_profile": "command_collector",
+        "produces": {
+          "checks": {
+            "select": "$.output.collection.checks",
+            "schema": "command_collection/v1"
+          }
+        },
+        "collect": {
+          "commands": [
+            {
+              "run": "sed -n '1,120p' README.md",
+              "id": "readme_intro",
+              "timeout_seconds": 10
+            }
+          ]
+        }
       },
       {
         "step_id": "review_docs",
         "type": "agent.review",
-        "depends_on": ["collect_docs"]
+        "depends_on": [
+          "collect_docs"
+        ],
+        "permission_profile": "reviewer_readonly",
+        "input": {
+          "prompt": "Review collected documentation for inconsistencies and missing evidence."
+        },
+        "consumes": [
+          {
+            "from": "collect_docs",
+            "select": "$.output.collection.checks[*].stdout",
+            "as": "docs",
+            "required": true,
+            "max_bytes": 20000
+          }
+        ]
       },
       {
         "step_id": "summarize",
         "type": "agent.synthesize",
-        "depends_on": ["review_docs"]
+        "depends_on": [
+          "review_docs"
+        ],
+        "permission_profile": "synthesizer",
+        "input": {
+          "prompt": "Summarize the review result with evidence."
+        },
+        "consumes": [
+          {
+            "from": "review_docs",
+            "select": "$.output.status",
+            "as": "review_status"
+          }
+        ]
+      },
+      {
+        "step_id": "verify_runtime",
+        "type": "command.verify",
+        "depends_on": [
+          "summarize"
+        ],
+        "permission_profile": "command_verifier",
+        "verify": {
+          "commands": [
+            {
+              "run": "node --version",
+              "id": "node_version",
+              "timeout_seconds": 10
+            }
+          ]
+        }
       }
-    ]
+    ],
+    "backend": "current",
+    "budget": {
+      "max_steps": 20,
+      "max_subagents": 8,
+      "max_rounds": 3
+    }
   }
 }

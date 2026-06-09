@@ -48,6 +48,38 @@ test("validates and rejects plans", async () => {
   await assert.rejects(execFileAsync("node", [binPath, "validate", invalidPath]), /unsupported_schema_version/);
 });
 
+test("validate and compile surface plan warnings without blocking valid plans", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dw-cli-warnings-"));
+  const planPath = path.join(dir, "warnings.yaml");
+  await writeFile(
+    planPath,
+    `schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_cli_warnings
+kind: mixed
+steps:
+  - step_id: verify_searches
+    type: command.verify
+    depends_on: []
+    verify:
+      commands:
+        - rg --glob '*.py' 'class ' .
+        - /bin/sh -c "rg optional_a ."
+        - rg optional_b .
+`,
+    "utf8"
+  );
+
+  const valid = await execFileAsync("node", [binPath, "validate", planPath]);
+  assert.match(valid.stdout, /valid dwf_cli_warnings steps=1/);
+  assert.match(valid.stdout, /warning broad_rg_missing_excludes step=verify_searches/);
+  assert.match(valid.stdout, /warning nested_shell step=verify_searches/);
+  assert.match(valid.stdout, /warning verify_optional_searches step=verify_searches/);
+
+  const compiled = await execFileAsync("node", [binPath, "compile", planPath]);
+  assert.match(compiled.stdout, /"manifest_version": "dynamic_workflow\/compiled\/v2"/);
+  assert.match(compiled.stderr, /warning broad_rg_missing_excludes step=verify_searches/);
+});
+
 test("compiles, runs, reports status, review, summary, and resume", async () => {
   const { planPath, rootDir } = await fixturePlan();
   const compiled = await execFileAsync("node", [binPath, "compile", planPath]);
@@ -148,6 +180,54 @@ steps:
   const resume = await execFileAsync("node", [binPath, "resume", runId, "--root", rootDir]);
   assert.match(resume.stdout, /reused_succeeded=3/);
   assert.match(resume.stdout, /state=completed/);
+});
+
+test("command.collect CLI workflow continues with partial evidence and summarizes gaps without raw output", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dw-cli-collect-"));
+  const planPath = path.join(dir, "collect.yaml");
+  const rootDir = path.join(dir, "runtime");
+  await writeFile(
+    planPath,
+    `schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_cli_collect
+kind: mixed
+steps:
+  - step_id: collect
+    type: command.collect
+    permission_profile: command_collector
+    depends_on: []
+    collect:
+      commands:
+        - id: docs
+          run: printf SHOULD_NOT_LEAK_COLLECTED_DOCS
+        - id: miss
+          run: tmp=$(mktemp -d); printf haystack > "$tmp/file.txt"; rg __dynamic_workflow_no_match__ "$tmp/file.txt"
+          allow_exit_codes: [0]
+          soft_fail: true
+  - step_id: synthesize
+    type: agent.synthesize
+    depends_on: [collect]
+    consumes:
+      - from: collect
+        select: $.output.collection.checks[*].stdout
+        as: collected
+`,
+    "utf8"
+  );
+
+  const valid = await execFileAsync("node", [binPath, "validate", planPath]);
+  assert.match(valid.stdout, /valid dwf_cli_collect steps=2/);
+
+  const run = await execFileAsync("node", [binPath, "run", planPath, "--root", rootDir]);
+  assert.match(run.stdout, /DW_RUN_COMPLETE/);
+  const runId = run.stdout.match(/DW_RUN_START (\S+)/)?.[1];
+  assert.ok(runId);
+
+  const summary = await execFileAsync("node", [binPath, "summarize", runId, "--root", rootDir]);
+  assert.match(summary.stdout, /"collection_gaps"/);
+  assert.match(summary.stdout, /"id": "miss"/);
+  assert.match(summary.stdout, /"failure_category": "no_match"/);
+  assert.doesNotMatch(summary.stdout, /SHOULD_NOT_LEAK_COLLECTED_DOCS/);
 });
 
 test("run returns non-zero on failed step", async () => {

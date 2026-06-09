@@ -94,8 +94,8 @@ export function validatePlan(input) {
                 }, stepId));
             }
         }
-        if (rawType === "command.verify") {
-            validateCommandVerifyCommands(rawStep, path, stepId, errors);
+        if (rawType === "command.verify" || rawType === "command.collect") {
+            validateCommandStepCommands(rawStep, path, stepId, rawType, errors);
         }
         const normalizedStep = {
             step_id: stepId,
@@ -111,7 +111,8 @@ export function validatePlan(input) {
         assignOptional(normalizedStep, "budget", stepBudget);
         assignOptional(normalizedStep, "run_if", runIf);
         assignOptional(normalizedStep, "strategy", readOptionalString(rawStep, "strategy"));
-        assignOptional(normalizedStep, "verify", readVerificationSpec(rawStep.verify));
+        assignOptional(normalizedStep, "verify", readVerificationSpec(rawStep.verify, `${path}.verify`, stepId, errors));
+        assignOptional(normalizedStep, "collect", readCommandCollectionSpec(rawStep.collect, `${path}.collect`, stepId, errors));
         normalizedSteps.push(normalizedStep);
     }
     validateReferences(normalizedSteps, errors);
@@ -250,34 +251,30 @@ function readBudget(value, path, errors, stepBudget) {
     }
     return Object.keys(budget).length > 0 ? budget : undefined;
 }
-function validateCommandVerifyCommands(rawStep, path, stepId, errors) {
+function validateCommandStepCommands(rawStep, path, stepId, stepType, errors) {
     const inputCommands = isRecord(rawStep.input) ? rawStep.input.commands : undefined;
     const verifyCommands = isRecord(rawStep.verify) ? rawStep.verify.commands : undefined;
-    const commands = verifyCommands ?? inputCommands;
+    const collectCommands = isRecord(rawStep.collect) ? rawStep.collect.commands : undefined;
+    const commands = stepType === "command.verify" ? verifyCommands ?? inputCommands : collectCommands ?? inputCommands;
     if (!Array.isArray(commands) || commands.length === 0) {
         errors.push(withStepId({
-            code: "missing_verify_commands",
-            message: "command.verify requires non-empty verify.commands or input.commands.",
-            path: `${path}.verify.commands`
+            code: stepType === "command.verify" ? "missing_verify_commands" : "missing_collect_commands",
+            message: stepType === "command.verify"
+                ? "command.verify requires non-empty verify.commands or input.commands."
+                : "command.collect requires non-empty collect.commands or input.commands.",
+            path: stepType === "command.verify" ? `${path}.verify.commands` : `${path}.collect.commands`
         }, stepId));
         return;
     }
-    for (const [index, command] of commands.entries()) {
-        if (typeof command !== "string" || command.trim() === "") {
-            errors.push(withStepId({
-                code: "invalid_verify_command",
-                message: `command.verify command ${index} must be a non-empty string.`,
-                path: `${path}.verify.commands[${index}]`
-            }, stepId));
-        }
-    }
+    readCommandDeclarations(commands, stepType === "command.verify" ? `${path}.verify.commands` : `${path}.collect.commands`, stepId, errors);
 }
-function readVerificationSpec(value) {
+function readVerificationSpec(value, path, stepId, errors) {
     if (!isRecord(value))
         return undefined;
     const spec = {};
-    if (Array.isArray(value.commands) && value.commands.every((command) => typeof command === "string")) {
-        spec.commands = value.commands;
+    const commands = readCommandDeclarations(value.commands, `${path}.commands`, stepId, errors);
+    if (commands) {
+        spec.commands = commands;
     }
     if (Array.isArray(value.required_artifacts) && value.required_artifacts.every((artifact) => typeof artifact === "string")) {
         spec.required_artifacts = value.required_artifacts;
@@ -286,6 +283,85 @@ function readVerificationSpec(value) {
         spec.output_schema = value.output_schema;
     }
     return Object.keys(spec).length > 0 ? spec : undefined;
+}
+function readCommandCollectionSpec(value, path, stepId, errors) {
+    if (!isRecord(value))
+        return undefined;
+    const commands = readCommandDeclarations(value.commands, `${path}.commands`, stepId, errors);
+    return commands ? { commands } : undefined;
+}
+function readCommandDeclarations(value, path, stepId, errors) {
+    if (value === undefined)
+        return undefined;
+    if (!Array.isArray(value)) {
+        errors.push(withStepId({ code: "invalid_command_list", message: `${path} must be an array.`, path }, stepId));
+        return undefined;
+    }
+    const commands = [];
+    for (const [index, rawCommand] of value.entries()) {
+        const itemPath = `${path}[${index}]`;
+        if (typeof rawCommand === "string") {
+            if (rawCommand.trim() === "") {
+                errors.push(withStepId({
+                    code: "invalid_command",
+                    message: `${itemPath} must be a non-empty command string.`,
+                    path: itemPath
+                }, stepId));
+                continue;
+            }
+            commands.push(rawCommand);
+            continue;
+        }
+        if (!isRecord(rawCommand)) {
+            errors.push(withStepId({ code: "invalid_command", message: `${itemPath} must be a string or command object.`, path: itemPath }, stepId));
+            continue;
+        }
+        const run = readString(rawCommand, "run", errors, itemPath);
+        const command = { run };
+        assignOptional(command, "id", readOptionalString(rawCommand, "id"));
+        assignOptional(command, "allow_exit_codes", readExitCodes(rawCommand.allow_exit_codes, `${itemPath}.allow_exit_codes`, stepId, errors));
+        if (rawCommand.soft_fail !== undefined && typeof rawCommand.soft_fail !== "boolean") {
+            errors.push(withStepId({ code: "invalid_command_option", message: `${itemPath}.soft_fail must be boolean.`, path: `${itemPath}.soft_fail` }, stepId));
+        }
+        else {
+            assignOptional(command, "soft_fail", rawCommand.soft_fail);
+        }
+        assignOptional(command, "timeout_seconds", readPositiveNumber(rawCommand.timeout_seconds, `${itemPath}.timeout_seconds`, stepId, errors));
+        assignOptional(command, "stdout_max_bytes", readMaxBytes(rawCommand.stdout_max_bytes, `${itemPath}.stdout_max_bytes`, stepId, errors));
+        assignOptional(command, "stderr_max_bytes", readMaxBytes(rawCommand.stderr_max_bytes, `${itemPath}.stderr_max_bytes`, stepId, errors));
+        commands.push(command);
+    }
+    return commands;
+}
+function readExitCodes(value, path, stepId, errors) {
+    if (value === undefined)
+        return undefined;
+    if (!Array.isArray(value) || value.length === 0) {
+        errors.push(withStepId({ code: "invalid_command_option", message: `${path} must be a non-empty array.`, path }, stepId));
+        return undefined;
+    }
+    const exitCodes = [];
+    for (const [index, exitCode] of value.entries()) {
+        if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) {
+            errors.push(withStepId({
+                code: "invalid_command_option",
+                message: `${path}[${index}] must be an integer from 0 to 255.`,
+                path: `${path}[${index}]`
+            }, stepId));
+            continue;
+        }
+        exitCodes.push(exitCode);
+    }
+    return exitCodes;
+}
+function readPositiveNumber(value, path, stepId, errors) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        errors.push(withStepId({ code: "invalid_command_option", message: `${path} must be a positive number.`, path }, stepId));
+        return undefined;
+    }
+    return value;
 }
 function readConsumes(value, path, stepId, errors) {
     if (value === undefined)

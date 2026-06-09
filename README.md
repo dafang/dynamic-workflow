@@ -15,7 +15,8 @@ Use Dynamic Workflow for:
 - Conditional workflows, such as classify-and-act or skipped branches.
 - Bounded repair loops.
 - Candidate tournaments.
-- Verification steps that must run shell commands and preserve results.
+- Evidence collection that should preserve partial results even when optional probes miss.
+- Verification steps that must run shell commands and fail strictly on broken invariants.
 - Auditable experiments where you want `status`, `review`, and `summarize` after execution.
 
 Do not use it for:
@@ -39,6 +40,14 @@ flowchart TD
 ```
 
 The important rule: the compiled manifest is the execution contract. Prompt prose can explain intent, but the runtime only executes what validates and compiles. `depends_on` controls scheduling; `consumes` controls which upstream artifact data is injected into downstream context.
+
+## Collect Vs Verify
+
+Use `command.collect` for evidence gathering: repository scans, code snippets, file listings, and exploratory searches. Optional misses are recorded as `collection.gaps`, and downstream review/synthesis steps consume evidence through `consumes`.
+
+Use `command.verify` for required proof: tests, builds, type checks, lint, schema checks, and final acceptance commands. It remains strict by default: a non-zero command exit fails the step unless the plan explicitly declares acceptable exit codes.
+
+Good workflows usually collect evidence early, review/synthesize it with explicit dataflow, then end with one or more strict `command.verify` steps.
 
 ## Install
 
@@ -112,7 +121,7 @@ const docs = command("collect_docs", {
 const review = agent.review("review_docs", {
   prompt: "Review README/SKILL/template consistency. Return structured findings.",
   context: {
-    docs: docs.output("$.verify.checks[*].stdout"),
+    docs: docs.output("$.output.collection.checks[*].stdout"),
   },
 });
 
@@ -170,8 +179,8 @@ For any of these requests, the agent must:
 1. Resolve the skill directory containing `SKILL.md`.
 2. Use `<skill_dir>/scripts/dw`, which resolves the bundled runtime at `<skill_dir>/runtime/bin/dw.mjs`.
 3. Write or select a typed plan from the skill template, then adapt it to the task.
-4. Run `validate`.
-5. Run `compile` and show a concise manifest summary.
+4. Run `validate`, read any warning lines, and revise brittle command shapes before execution.
+5. Run `compile` and show a concise manifest/risk summary, including warnings when present.
 6. Continue without another user command through `run`, `status`, `review`, and `summarize`.
 7. Stop before execution only when the user explicitly asks for plan-only review.
 8. Resolve omitted plan paths and run ids from recent context when unambiguous.
@@ -238,16 +247,35 @@ steps:
 Important fields:
 
 - `step_id`: stable id used by dependencies and traces.
-- `type`: registered step type, such as `agent.review`, `workflow.loop`, or `command.verify`.
+- `type`: registered step type, such as `agent.review`, `workflow.loop`, `command.collect`, or `command.verify`.
 - `depends_on`: explicit step dependencies.
 - `consumes`: optional dataflow inputs selected from upstream step artifacts.
 - `produces`: optional stable output contract names for a step.
 - `run_if`: optional condition evaluated against a previous step's output object.
-- `verify.commands`: canonical command list for `command.verify`.
+- `collect.commands`: canonical command list for `command.collect` evidence gathering.
+- `verify.commands`: canonical command list for strict `command.verify`.
 - `permission_profile`: optional explicit profile; defaults come from the registry.
 - `input.resource_scope`: optional lock scope used by conflict detection.
 
 For the complete plan authoring contract, including every supported step type and permission profile, see `skills/dynamic-workflow/references/plan.md`.
+
+Example collection step with a bounded scan:
+
+```yaml
+- step_id: collect_python_defs
+  type: command.collect
+  permission_profile: command_collector
+  depends_on: []
+  collect:
+    commands:
+      - id: py_defs
+        run: "rg --glob '*.py' --glob '!{.venv,.dynamic-workflow,__pycache__}/**' 'def |class ' ."
+        allow_exit_codes: [0, 1]
+        soft_fail: true
+        timeout_seconds: 30
+```
+
+`dw validate` and `dw compile` surface non-blocking warnings for brittle commands, such as broad `rg` scans without excludes, nested shell wrappers, and optional searches placed under strict `command.verify`.
 
 ## Supported Workflow Modes
 
@@ -419,7 +447,8 @@ The current MVP has been exercised across:
 - `workflow.tournament` pairwise expansion.
 - `workflow.loop` bounded rounds.
 - Control dependency rewriting for `depends_on` and `run_if.step`.
-- `command.verify` with canonical `verify.commands`.
+- `command.collect` with partial evidence and collection gaps.
+- `command.verify` with canonical strict `verify.commands`.
 - Manifest v2 `consumes`, `produces`, selected StepContext injection, and sanitized context source summaries.
 - JS harness capture, `StepHandle.output(...)` dataflow refs, and denied-capability checks.
 - CLI lifecycle: `validate`, `compile`, `run`, `status`, `review`, `summarize`, and `resume`.

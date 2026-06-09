@@ -3,6 +3,7 @@ import { computeResourceLocks, writerConflicts, type ResourceLock } from "./reso
 import { assertValidPlan } from "./validation.js";
 import type {
   JsonObject,
+  CommandCollectionSpec,
   RunCondition,
   StepConsume,
   StepProduces,
@@ -26,6 +27,7 @@ export interface CompiledNode {
   backend: "current";
   run_if?: RunCondition;
   verify?: VerificationSpec;
+  collect?: CommandCollectionSpec;
   resource_locks: ResourceLock[];
   control_origin?: string;
 }
@@ -121,6 +123,7 @@ export function compilePlan(input: unknown, options: CompileOptions = {}): Compi
     assignOptional(node, "produces", step.produces);
     assignOptional(node, "run_if", step.run_if);
     assignOptional(node, "verify", step.verify);
+    assignOptional(node, "collect", step.collect);
     const origin = typeof step.input?.control_origin === "string" ? step.input.control_origin : undefined;
     assignOptional(node, "control_origin", origin);
     return node;

@@ -52,6 +52,10 @@ Then clean the temp dir, or use a shell `trap`.
 - `workflow.include`, `workflow.loop`, and `workflow.tournament` must be usable as natural dependency targets by plan authors. The compiler owns rewriting to terminal expanded nodes.
 - `run_if.output_path` is evaluated against the step output object. Example: `output_path: status` reads the emitted output status.
 - Writer conflict checks are part of the audit surface. If a plan needs parallel writers, give them distinct `input.resource_scope` values or add explicit dependencies.
+- `command.collect` is for evidence gathering and optional probes. It may record `collection.gaps` and still let downstream reviewers/synthesizers consume partial evidence through `consumes`.
+- `command.verify` is for required invariants and remains strict by default. Do not weaken verification semantics to make optional searches pass.
+- Command artifacts may contain capped stdout/stderr; trace events must contain metadata only, not raw command output.
+- `dw validate` / `dw compile` warnings are quality diagnostics, not hard validation errors. Tests should assert both: warnings do not block valid plans, and validation errors still fail closed.
 
 ## Harness Rules
 
@@ -82,6 +86,7 @@ When a change touches orchestration semantics, run more than unit tests:
 - Round 3: tournament plus loop plus downstream verify.
 - Round 4: JS harness security and adversarial review dependency capture.
 - Round 5: fix verification for issues found in prior rounds.
+- Command diagnostics round: include `command.collect` with no-match and missing optional evidence, strict `command.verify` failure, broad `rg` warning, nested shell warning, and summary output that reports gaps without raw output.
 
 Paseo subagents are useful for these rounds. Before creating a Paseo agent, read `~/.paseo/orchestration-preferences.json` and use the configured provider for the agent role. Give each subagent an explicit temporary-artifact rule: all plans, scripts, and runtime output must live under `mktemp`, and CLI execution must use `--root <tmp>/runtime`.
 
@@ -98,6 +103,7 @@ The current implementation has been exercised with local tests and Paseo validat
 - `workflow.loop` bounded rounds.
 - Control dependency rewriting for `depends_on` and `run_if.step`.
 - `command.verify` with canonical `verify.commands`.
+- `command.collect` with partial evidence, `collection.gaps`, command-level trace metadata, and plan warnings.
 - JS harness capture, denied capability checks, prompt/comment false positive checks, sequential dependency capture, and duplicate step id dependency repair.
 - CLI lifecycle: `validate`, `compile`, `run`, `status`, `review`, `summarize`, and `resume`.
 - Failure/audit signals for queued/partial states, missing artifacts, unknown dependencies, unsupported backends, and writer conflicts.

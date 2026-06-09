@@ -9,18 +9,17 @@ budget:
   max_rounds: 3
 steps:
   - step_id: collect_docs
-    type: command.verify
-    permission_profile: command_verifier
-    input:
+    type: command.collect
+    permission_profile: command_collector
+    collect:
       commands:
-        - sed -n '1,120p' README.md
-    verify:
-      commands:
-        - sed -n '1,120p' README.md
+        - id: readme_intro
+          run: sed -n '1,120p' README.md
+          timeout_seconds: 10
     produces:
       checks:
-        select: $.verify.checks
-        schema: command_checks/v1
+        select: $.output.collection.checks
+        schema: command_collection/v1
     depends_on: []
 
   - step_id: review_docs
@@ -30,7 +29,7 @@ steps:
       prompt: Review collected documentation for inconsistencies and missing evidence.
     consumes:
       - from: collect_docs
-        select: $.verify.checks[*].stdout
+        select: $.output.collection.checks[*].stdout
         as: docs
         required: true
         max_bytes: 20000
@@ -48,3 +47,14 @@ steps:
         as: review_status
     depends_on:
       - review_docs
+
+  - step_id: verify_runtime
+    type: command.verify
+    permission_profile: command_verifier
+    verify:
+      commands:
+        - id: node_version
+          run: node --version
+          timeout_seconds: 10
+    depends_on:
+      - summarize

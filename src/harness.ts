@@ -328,11 +328,11 @@ function createDeclarativeStep(
     const produces = readProducesOption(options);
     const step: WorkflowStep = {
       step_id: stepId,
-      type: "command.verify",
-      permission_profile: "command_verifier",
+      type: "command.collect",
+      permission_profile: "command_collector",
       input: { commands },
       depends_on: [],
-      verify: { commands }
+      collect: { commands }
     };
     assignOptional(step, "produces", produces);
     return step;

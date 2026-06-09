@@ -116,6 +116,73 @@ test("validates dataflow consumes and produces", () => {
   assert.equal(result.plan.steps[0]?.produces?.checks?.schema, "command_checks/v1");
 });
 
+test("validates command.collect command objects with collector permission profile", () => {
+  const result = validatePlan(
+    validPlan({
+      steps: [
+        {
+          step_id: "collect",
+          type: "command.collect",
+          permission_profile: "command_collector",
+          depends_on: [],
+          collect: {
+            commands: [
+              {
+                id: "search",
+                run: "rg needle .",
+                allow_exit_codes: [0, 1],
+                soft_fail: true,
+                timeout_seconds: 5,
+                stdout_max_bytes: 1000,
+                stderr_max_bytes: 500
+              }
+            ]
+          },
+          produces: {
+            checks: { select: "$.output.collection.checks", schema: "command_collection/v1" }
+          }
+        }
+      ]
+    })
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.steps[0]?.permission_profile, "command_collector");
+  assert.equal(result.plan.steps[0]?.type, "command.collect");
+  assert.deepEqual(result.plan.steps[0]?.collect?.commands, [
+    {
+      id: "search",
+      run: "rg needle .",
+      allow_exit_codes: [0, 1],
+      soft_fail: true,
+      timeout_seconds: 5,
+      stdout_max_bytes: 1000,
+      stderr_max_bytes: 500
+    }
+  ]);
+});
+
+test("rejects invalid command.collect declarations", () => {
+  expectError(
+    validPlan({
+      steps: [{ step_id: "collect", type: "command.collect", depends_on: [] }]
+    }),
+    "missing_collect_commands"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        {
+          step_id: "collect",
+          type: "command.collect",
+          depends_on: [],
+          collect: { commands: [{ run: "printf ok", allow_exit_codes: [300] }] }
+        }
+      ]
+    }),
+    "invalid_command_option"
+  );
+});
+
 test("rejects invalid dataflow references and aliases", () => {
   expectError(
     validPlan({
@@ -258,6 +325,7 @@ test("registry includes the first-step set and permission profiles", () => {
     "agent.judge_pair",
     "agent.review",
     "agent.synthesize",
+    "command.collect",
     "command.verify",
     "human.approval",
     "workflow.include",
@@ -270,6 +338,7 @@ test("registry includes the first-step set and permission profiles", () => {
       .sort(),
     [
       "classifier",
+      "command_collector",
       "command_verifier",
       "executor_writer",
       "human_approval",

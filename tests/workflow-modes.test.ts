@@ -14,7 +14,7 @@ import type { JsonObject, WorkflowPlan, WorkflowStep } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
 const binPath = path.resolve("bin/dw.mjs");
-const MATRIX_PATH = path.resolve(".supergoal/workflow-mode-matrix.md");
+const MATRIX_PATH = path.resolve("tests/fixtures/workflow-mode-matrix.md");
 
 function plan(workflowId: string, steps: WorkflowStep[]): WorkflowPlan {
   return {
@@ -297,7 +297,7 @@ const docs = command("collect_docs", { run: ["printf docs"] })
 const implementation = agent.execute("implement_module", {
   prompt: "Implement module from docs",
   context: {
-    docs: docs.output("$.verify.checks[*].stdout")
+    docs: docs.output("$.output.collection.checks[*].stdout")
   }
 })
 const review = agent.review("review_module", {
@@ -309,7 +309,7 @@ const review = agent.review("review_module", {
 agent.synthesize("summarize_module", {
   prompt: "Summarize module",
   context: {
-    docs: docs.output("$.verify.checks[*].stdout"),
+    docs: docs.output("$.output.collection.checks[*].stdout"),
     review: review.output("$.output.status")
   }
 })
@@ -317,13 +317,13 @@ agent.synthesize("summarize_module", {
   const result = compileHarnessToPlan(source, "dwf_mode_harness");
   assert.deepEqual(
     result.plan.steps.map((step) => step.type),
-    ["command.verify", "agent.execute", "agent.review", "agent.synthesize"]
+    ["command.collect", "agent.execute", "agent.review", "agent.synthesize"]
   );
   assert.deepEqual(result.manifest.dependencies.implement_module, ["collect_docs"]);
   assert.deepEqual(result.manifest.dependencies.review_module, ["implement_module"]);
   assert.deepEqual(result.manifest.dependencies.summarize_module, ["collect_docs", "review_module"]);
   assert.deepEqual(result.manifest.nodes.find((node) => node.step_id === "summarize_module")?.consumes, [
-    { from: "collect_docs", select: "$.verify.checks[*].stdout", as: "docs" },
+    { from: "collect_docs", select: "$.output.collection.checks[*].stdout", as: "docs" },
     { from: "review_module", select: "$.output.status", as: "review" }
   ]);
   assert.throws(() => compileHarnessToPlan("process.env.SECRET"), /Harness denied capability/);

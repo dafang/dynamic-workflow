@@ -48,7 +48,7 @@ test("runtime creates durable run tree, trace, step outputs, and completes audit
   assert.match(trace, /workflow_completed/);
 });
 
-test("command.verify executes commands declared in verify.commands", async () => {
+test("command.verify executes commands declared in verify.commands and emits command trace metadata", async () => {
   const rootDir = await tempRoot();
   const result = await runWorkflow(
     plan([
@@ -56,17 +56,223 @@ test("command.verify executes commands declared in verify.commands", async () =>
         step_id: "verify",
         type: "command.verify",
         depends_on: [],
-        verify: { commands: ["node --version"] }
+        verify: { commands: ["node --version", "node -e \"process.stdout.write(String.fromCharCode(115,101,99,111,110,100))\""] }
       }
     ]),
     { rootDir, runId: "run_verify_contract" }
   );
   assert.equal(result.record.state, "completed");
   const text = await readFile(path.join(result.record.run_dir, "steps", "verify.json"), "utf8");
-  const artifact = JSON.parse(text) as { output: { checks: Array<{ command: string; exit_code: number }> } };
-  assert.equal(artifact.output.checks.length, 1);
+  const artifact = JSON.parse(text) as {
+    output: {
+      checks: Array<{
+        command: string;
+        exit_code: number;
+        elapsed_ms: number;
+        timed_out: boolean;
+        stdout_bytes: number;
+        stderr_bytes: number;
+        acceptable: boolean;
+      }>;
+    };
+  };
+  assert.equal(artifact.output.checks.length, 2);
   assert.equal(artifact.output.checks[0]?.command, "node --version");
   assert.equal(artifact.output.checks[0]?.exit_code, 0);
+  assert.equal(artifact.output.checks[0]?.timed_out, false);
+  assert.equal(artifact.output.checks[0]?.acceptable, true);
+  assert.equal(typeof artifact.output.checks[0]?.elapsed_ms, "number");
+  assert.equal(artifact.output.checks[1]?.stdout_bytes, 6);
+
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  const events = trace
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { event: string; data?: Record<string, unknown> });
+  const commandStarted = events.filter((event) => event.event === "command_started");
+  const commandFinished = events.filter((event) => event.event === "command_finished");
+  assert.equal(commandStarted.length, 2);
+  assert.equal(commandFinished.length, 2);
+  assert.deepEqual(commandStarted.map((event) => event.data?.command_index), [0, 1]);
+  assert.equal(commandStarted[0]?.data?.command_preview, "node --version");
+  assert.equal(commandFinished[0]?.data?.timed_out, false);
+  assert.equal(typeof commandFinished[0]?.data?.elapsed_ms, "number");
+  assert.equal(commandFinished[1]?.data?.stdout_bytes, 6);
+  for (const event of [...commandStarted, ...commandFinished]) {
+    assert.equal(Object.hasOwn(event.data ?? {}, "stdout"), false, "trace should not include raw stdout");
+    assert.equal(Object.hasOwn(event.data ?? {}, "stderr"), false, "trace should not include raw stderr");
+  }
+});
+
+test("command.verify caps command stdout in artifacts while recording original byte counts", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "verify",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["node -e \"process.stdout.write('x'.repeat(2505))\""] }
+      }
+    ]),
+    { rootDir, runId: "run_command_output_cap" }
+  );
+  assert.equal(result.record.state, "completed");
+  const text = await readFile(path.join(result.record.run_dir, "steps", "verify.json"), "utf8");
+  const artifact = JSON.parse(text) as { output: { checks: Array<{ stdout: string; stdout_bytes: number; stdout_truncated: boolean }> } };
+  assert.equal(artifact.output.checks[0]?.stdout.length, 2000);
+  assert.equal(artifact.output.checks[0]?.stdout_bytes, 2505);
+  assert.equal(artifact.output.checks[0]?.stdout_truncated, true);
+});
+
+test("command.verify records non-zero command failure category and blocks downstream", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "verify",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["node -e \"process.exit(7)\""] }
+      },
+      { step_id: "after", type: "agent.review", depends_on: ["verify"] }
+    ]),
+    { rootDir, runId: "run_command_nonzero" }
+  );
+  assert.equal(result.record.state, "failed");
+  assert.equal(result.record.steps.after?.state, "blocked");
+  const artifactText = await readFile(path.join(result.record.run_dir, "steps", "verify.json"), "utf8");
+  const artifact = JSON.parse(artifactText) as {
+    output: { checks: Array<{ exit_code: number; timed_out: boolean; failure_category: string; repair_hint: string }> };
+  };
+  assert.equal(artifact.output.checks[0]?.exit_code, 7);
+  assert.equal(artifact.output.checks[0]?.timed_out, false);
+  assert.equal(artifact.output.checks[0]?.failure_category, "nonzero_exit");
+  assert.match(artifact.output.checks[0]?.repair_hint ?? "", /stdout\/stderr|failing invariant/);
+
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  assert.match(trace, /command_failed/);
+  assert.match(trace, /nonzero_exit/);
+});
+
+test("command.verify distinguishes timeout failures from normal non-zero exits in artifacts and trace", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "verify",
+        type: "command.verify",
+        depends_on: [],
+        input: { timeout_seconds: 0.2 },
+        verify: { commands: ["node -e \"setTimeout(() => {}, 130000)\""] }
+      }
+    ]),
+    { rootDir, runId: "run_command_timeout" }
+  );
+  assert.equal(result.record.state, "failed");
+  const artifactText = await readFile(path.join(result.record.run_dir, "steps", "verify.json"), "utf8");
+  const artifact = JSON.parse(artifactText) as {
+    output: {
+      checks: Array<{ exit_code: number | null; signal: string | null; timed_out: boolean; failure_category: string; repair_hint: string }>;
+    };
+  };
+  assert.equal(artifact.output.checks[0]?.timed_out, true);
+  assert.equal(artifact.output.checks[0]?.failure_category, "timeout");
+  assert.match(artifact.output.checks[0]?.repair_hint ?? "", /Narrow the command scope/);
+
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  assert.match(trace, /command_finished/);
+  assert.match(trace, /command_failed/);
+  assert.match(trace, /"timed_out":true/);
+  assert.match(trace, /"failure_category":"timeout"/);
+});
+
+test("command.collect records no-match and missing optional evidence gaps while downstream consumes partial checks", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.collect",
+        permission_profile: "command_collector",
+        depends_on: [],
+        collect: {
+          commands: [
+            {
+              id: "hit",
+              run: "printf collected-docs",
+              stdout_max_bytes: 50
+            },
+            {
+              id: "no_match",
+              run: "tmp=$(mktemp -d); printf haystack > \"$tmp/file.txt\"; rg __dynamic_workflow_no_match__ \"$tmp/file.txt\"",
+              allow_exit_codes: [0],
+              soft_fail: true
+            },
+            {
+              id: "missing_path",
+              run: "ls ./__dynamic_workflow_missing_path__",
+              soft_fail: true
+            }
+          ]
+        }
+      },
+      {
+        step_id: "synthesize",
+        type: "agent.synthesize",
+        depends_on: ["collect"],
+        consumes: [{ from: "collect", select: "$.output.collection.checks[*].stdout", as: "collected" }]
+      }
+    ]),
+    { rootDir, runId: "run_collect_partial" }
+  );
+  assert.equal(result.record.state, "completed");
+  assert.equal(result.record.steps.collect?.state, "succeeded");
+  assert.equal(result.record.steps.synthesize?.state, "succeeded");
+  const collectText = await readFile(path.join(result.record.run_dir, "steps", "collect.json"), "utf8");
+  const collectArtifact = JSON.parse(collectText) as {
+    output: {
+      collection: {
+        ok: boolean;
+        checks: Array<{ id: string; stdout: string; acceptable: boolean; soft_failed: boolean; failure_category?: string }>;
+        gaps: Array<{ id: string; failure_category: string; soft_failed: boolean }>;
+      };
+    };
+  };
+  assert.equal(collectArtifact.output.collection.ok, true);
+  assert.equal(collectArtifact.output.collection.checks[0]?.stdout, "collected-docs");
+  assert.deepEqual(
+    collectArtifact.output.collection.gaps.map((gap) => [gap.id, gap.failure_category, gap.soft_failed]),
+    [
+      ["no_match", "no_match", true],
+      ["missing_path", "missing_path", true]
+    ]
+  );
+  const synthesizeText = await readFile(path.join(result.record.run_dir, "steps", "synthesize.json"), "utf8");
+  assert.match(synthesizeText, /collected-docs/);
+});
+
+test("command.verify remains strict when a non-zero exit is not explicitly allowed", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "verify",
+        type: "command.verify",
+        depends_on: [],
+        verify: {
+          commands: [{ id: "strict", run: "node -e \"process.exit(1)\"" }]
+        }
+      }
+    ]),
+    { rootDir, runId: "run_verify_still_strict" }
+  );
+  assert.equal(result.record.state, "failed");
+  assert.equal(result.record.steps.verify?.state, "failed");
+  const artifactText = await readFile(path.join(result.record.run_dir, "steps", "verify.json"), "utf8");
+  const artifact = JSON.parse(artifactText) as { verify: { ok: boolean }; output: { checks: Array<{ acceptable: boolean }> } };
+  assert.equal(artifact.verify.ok, false);
+  assert.equal(artifact.output.checks[0]?.acceptable, false);
 });
 
 test("runtime injects command output into downstream agent context", async () => {

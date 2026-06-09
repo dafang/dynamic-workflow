@@ -21,6 +21,7 @@ export type PermissionProfileName =
   | "synthesizer"
   | "research"
   | "command_verifier"
+  | "command_collector"
   | "human_approval";
 
 export type StepType =
@@ -35,6 +36,7 @@ export type StepType =
   | "workflow.loop"
   | "workflow.tournament"
   | "command.verify"
+  | "command.collect"
   | "human.approval";
 
 export type ConditionOperator = "==" | "!=" | ">" | ">=" | "<" | "<=" | "exists" | "not_exists";
@@ -60,9 +62,25 @@ export interface StepBudget {
 }
 
 export interface VerificationSpec {
-  commands?: string[];
+  commands?: CommandDeclaration[];
   required_artifacts?: string[];
   output_schema?: JsonObject;
+}
+
+export interface CommandSpec {
+  id?: string;
+  run: string;
+  allow_exit_codes?: number[];
+  soft_fail?: boolean;
+  timeout_seconds?: number;
+  stdout_max_bytes?: number;
+  stderr_max_bytes?: number;
+}
+
+export type CommandDeclaration = string | CommandSpec;
+
+export interface CommandCollectionSpec {
+  commands?: CommandDeclaration[];
 }
 
 export interface ArtifactRef {
@@ -97,6 +115,7 @@ export interface WorkflowStep {
   run_if?: RunCondition;
   strategy?: string;
   verify?: VerificationSpec;
+  collect?: CommandCollectionSpec;
 }
 
 export interface WorkflowPlan {

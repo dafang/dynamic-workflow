@@ -6,6 +6,9 @@ export function getRuntimeBanner(): string {
 
 export type {
   ArtifactRef,
+  CommandCollectionSpec,
+  CommandDeclaration,
+  CommandSpec,
   JsonObject,
   JsonValue,
   RunCondition,
@@ -25,6 +28,8 @@ export { listPermissionProfiles, PERMISSION_PROFILES } from "./permissions.js";
 export { listStepTypes, STEP_REGISTRY } from "./registry.js";
 export { HOST_LIMITS } from "./schema.js";
 export { assertValidPlan, validatePlan } from "./validation.js";
+export { lintPlan } from "./lints.js";
+export type { PlanWarning } from "./lints.js";
 export { compilePlan } from "./compiler.js";
 export type { BudgetSummary, CompiledManifest, CompiledNode } from "./compiler.js";
 export { auditRun } from "./audit.js";

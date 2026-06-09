@@ -16,6 +16,10 @@ export interface StepContext {
     step_id: string;
     inputs: JsonObject;
     sources: StepContextSource[];
+    trace?: (event: {
+        event: string;
+        data?: JsonObject;
+    }) => Promise<void>;
 }
 export interface BackendStepResult {
     status: "succeeded" | "failed" | "waiting_user";

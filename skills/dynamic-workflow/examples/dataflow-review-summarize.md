@@ -10,7 +10,7 @@ const docs = command("collect_docs", {
 const review = agent.review("review_docs", {
   prompt: "Review collected documentation for inconsistencies and missing evidence.",
   context: {
-    docs: docs.output("$.verify.checks[*].stdout"),
+    docs: docs.output("$.output.collection.checks[*].stdout"),
   },
 });
 
@@ -30,22 +30,25 @@ workflow_id: dwf_dataflow_review
 kind: review
 steps:
   - step_id: collect_docs
-    type: command.verify
+    type: command.collect
+    permission_profile: command_collector
     depends_on: []
-    verify:
+    collect:
       commands:
-        - sed -n '1,120p' README.md
+        - id: readme_intro
+          run: sed -n '1,120p' README.md
+          timeout_seconds: 10
     produces:
       checks:
-        select: $.verify.checks
-        schema: command_checks/v1
+        select: $.output.collection.checks
+        schema: command_collection/v1
 
   - step_id: review_docs
     type: agent.review
     depends_on: [collect_docs]
     consumes:
       - from: collect_docs
-        select: $.verify.checks[*].stdout
+        select: $.output.collection.checks[*].stdout
         as: docs
 
   - step_id: summarize

@@ -40,7 +40,8 @@ This file maps the design documents to the 0.1.0 MVP implementation.
 ## 06-typed-plan-runtime.md
 
 - Implemented: schema validation, step registry, dependency validation, cycle detection, budget limits, compiler DAG, ready queue, `run_if` preservation and runtime skipping, include/loop/tournament expansion, scheduler, structured outputs, trace, and final audit.
-- Implemented: `command.verify` executes commands declared in canonical `verify.commands`; legacy `input.commands` remains accepted for existing plans.
+- Implemented: `command.collect` executes bounded evidence collection commands with partial gaps; `command.verify` executes strict commands declared in canonical `verify.commands`; legacy `input.commands` remains accepted for existing verify plans.
+- Implemented: command-level trace events and command artifacts include elapsed time, exit code, timeout status, byte counts, failure category, and repair hint while keeping trace output metadata-only.
 - Implemented: dependencies and `run_if.step` references to control step ids are rewritten to terminal expanded nodes during compilation; compiled manifests fail closed if any dependency or condition references a missing node.
 - Implemented: runtime evaluates `run_if.output_path` against the step output object, so `output_path: "status"` reads the emitted output status.
 - Safe MVP: only `current` backend is executable.
@@ -49,7 +50,7 @@ This file maps the design documents to the 0.1.0 MVP implementation.
 
 - Implemented: manifest v2 carries `consumes` and `produces`; validation checks selectors, aliases, upstream references, and context byte limits.
 - Implemented: runtime builds `StepContext` from upstream step artifacts, clips oversized selected values, passes context to the backend, and records `context` / `context_sources` in `agent.*` artifacts.
-- Implemented: JS harness captures `command(...)`, `agent.review(...)`, `agent.synthesize(...)`, `agent.execute(...)`, and `StepHandle.output(selector)` dataflow refs without executing arbitrary JavaScript.
+- Implemented: JS harness captures `command(...)` as `command.collect`, plus `agent.review(...)`, `agent.synthesize(...)`, `agent.execute(...)`, and `StepHandle.output(selector)` dataflow refs without executing arbitrary JavaScript.
 - Implemented: CLI lifecycle validates, compiles, runs, reviews, summarizes, and resumes dataflow plans; summaries expose source metadata but not raw context payloads.
 - Compatibility rule: existing `dynamic_workflow/run/v1` plans continue to run; if `consumes` is absent, runtime behaves like the scheduling-only MVP.
 - Current limit: external Codex, Claude, ACP, and remote backend adapters are still deliberately rejected; only backend `current` executes.

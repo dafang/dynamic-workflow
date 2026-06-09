@@ -1,3 +1,4 @@
+import { lintPlan } from "../lints.js";
 import { validatePlan } from "../validation.js";
 import { readPlanFile } from "./common.js";
 export async function validateCommand(args, context) {
@@ -12,6 +13,9 @@ export async function validateCommand(args, context) {
         return 1;
     }
     context.stdout.write(`valid ${result.plan.workflow_id} steps=${result.plan.steps.length}\n`);
+    for (const warning of lintPlan(result.plan)) {
+        context.stdout.write(`warning ${warning.code}${warning.step_id ? ` step=${warning.step_id}` : ""}: ${warning.message}\n`);
+    }
     return 0;
 }
 //# sourceMappingURL=plan.js.map
