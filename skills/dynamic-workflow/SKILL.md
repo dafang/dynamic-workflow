@@ -13,6 +13,8 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
    - Skill directory: the directory containing this `SKILL.md`.
    - Package root: the repository/runtime root containing `package.json` and `bin/dw.mjs`.
 2. Write or select a typed plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, read `<skill_dir>/references/plan.md` for the supported step types and fields.
+   - Prefer explicit dataflow when a downstream `agent.review`, `agent.synthesize`, or `agent.execute` needs upstream evidence: add `consumes` entries rather than relying on `depends_on` alone.
+   - Treat JS-first examples with `command(...)`, `agent.review(...)`, and `StepHandle.output(...)` as authoring guidance that captures to manifest IR; do not execute arbitrary JavaScript.
 3. Run `node <package_root>/bin/dw.mjs validate <plan>` and fix structured validation errors before execution.
 4. Run `node <package_root>/bin/dw.mjs compile <plan>` and show a concise manifest/risk summary.
 5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `node <package_root>/bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
@@ -22,6 +24,7 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 ## Safety Rules
 
 - Typed plans are canonical; prompt prose is not an execution contract.
+- `depends_on` is scheduling only. Use `consumes` to pass selected artifact context forward.
 - Backend defaults to `current`; explicit `codex`, `claude`, `acp`, or remote backend names fail closed in the MVP.
 - Runtime artifacts default to `.dynamic-workflow/runs/<run_id>/`; when `--root <dir>` is passed, artifacts are written under `<dir>/runs/<run_id>/`.
 - Command prompts may call the CLI or scripts wrapping the CLI, but must not duplicate divergent runtime logic.

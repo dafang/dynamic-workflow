@@ -51,7 +51,7 @@ test("validates and rejects plans", async () => {
 test("compiles, runs, reports status, review, summary, and resume", async () => {
   const { planPath, rootDir } = await fixturePlan();
   const compiled = await execFileAsync("node", [binPath, "compile", planPath]);
-  assert.match(compiled.stdout, /"manifest_version": "dynamic_workflow\/compiled\/v1"/);
+  assert.match(compiled.stdout, /"manifest_version": "dynamic_workflow\/compiled\/v2"/);
 
   const run = await execFileAsync("node", [binPath, "run", planPath, "--root", rootDir]);
   assert.match(run.stdout, /DW_RUN_START/);
@@ -75,6 +75,79 @@ test("compiles, runs, reports status, review, summary, and resume", async () => 
 
   const resume = await execFileAsync("node", [binPath, "resume", runId, "--root", rootDir]);
   assert.match(resume.stdout, /reused_succeeded=2/);
+});
+
+test("dataflow plan completes full CLI lifecycle with sanitized context summary", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dw-cli-dataflow-"));
+  const planPath = path.join(dir, "dataflow.yaml");
+  const rootDir = path.join(dir, "runtime");
+  await writeFile(
+    planPath,
+    `schema_version: dynamic_workflow/run/v1
+workflow_id: dwf_cli_dataflow
+kind: mixed
+steps:
+  - step_id: collect
+    type: command.verify
+    depends_on: []
+    verify:
+      commands:
+        - printf dataflow-docs
+  - step_id: review
+    type: agent.review
+    depends_on: [collect]
+    input:
+      prompt: "Review raw_prompt token secret should stay out of summary"
+    consumes:
+      - from: collect
+        select: $.verify.checks[*].stdout
+        as: docs
+  - step_id: synthesize
+    type: agent.synthesize
+    depends_on: [review]
+    input:
+      prompt: "Summarize findings"
+    consumes:
+      - from: review
+        select: $.output.context.docs
+        as: findings
+        max_bytes: 8
+`,
+    "utf8"
+  );
+
+  const valid = await execFileAsync("node", [binPath, "validate", planPath]);
+  assert.match(valid.stdout, /valid dwf_cli_dataflow steps=3/);
+
+  const compiled = await execFileAsync("node", [binPath, "compile", planPath]);
+  assert.match(compiled.stdout, /"manifest_version": "dynamic_workflow\/compiled\/v2"/);
+  assert.match(compiled.stdout, /"consumes"/);
+  assert.match(compiled.stdout, /"as": "docs"/);
+
+  const run = await execFileAsync("node", [binPath, "run", planPath, "--root", rootDir]);
+  assert.match(run.stdout, /DW_RUN_COMPLETE/);
+  assert.match(run.stdout, /DW_STEP_VERIFY synthesize succeeded/);
+  const runId = run.stdout.match(/DW_RUN_START (\S+)/)?.[1];
+  assert.ok(runId);
+
+  const status = await execFileAsync("node", [binPath, "status", runId, "--root", rootDir]);
+  assert.match(status.stdout, /state=completed/);
+  assert.match(status.stdout, /step synthesize state=succeeded/);
+
+  const review = await execFileAsync("node", [binPath, "review", runId, "--root", rootDir]);
+  assert.match(review.stdout, /"ok": true/);
+
+  const summary = await execFileAsync("node", [binPath, "summarize", runId, "--root", rootDir]);
+  assert.match(summary.stdout, /"context_sources"/);
+  assert.match(summary.stdout, /"alias": "docs"/);
+  assert.match(summary.stdout, /"alias": "findings"/);
+  assert.match(summary.stdout, /"clipped": true/);
+  assert.doesNotMatch(summary.stdout, /dataflow-docs/);
+  assert.doesNotMatch(summary.stdout, /raw_prompt|token|secret/);
+
+  const resume = await execFileAsync("node", [binPath, "resume", runId, "--root", rootDir]);
+  assert.match(resume.stdout, /reused_succeeded=3/);
+  assert.match(resume.stdout, /state=completed/);
 });
 
 test("run returns non-zero on failed step", async () => {

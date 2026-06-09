@@ -5,9 +5,13 @@ export function getRuntimeBanner(): string {
 }
 
 export type {
+  ArtifactRef,
   JsonObject,
   JsonValue,
   RunCondition,
+  StepConsume,
+  StepProduce,
+  StepProduces,
   StepState,
   StepType,
   ValidationError,

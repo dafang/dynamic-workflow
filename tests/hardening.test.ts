@@ -126,7 +126,10 @@ test("skill bundled plan template is the documented authoring base and validates
 
   const compiled = await execFileAsync("node", [binPath, "compile", templatePath]);
   assert.match(compiled.stdout, /"workflow_id": "dwf_example"/);
-  assert.match(compiled.stdout, /"step_id": "classify"/);
+  assert.match(compiled.stdout, /"manifest_version": "dynamic_workflow\/compiled\/v2"/);
+  assert.match(compiled.stdout, /"step_id": "collect_docs"/);
+  assert.match(compiled.stdout, /"consumes"/);
+  assert.match(compiled.stdout, /"produces"/);
 });
 
 test("skill dw wrapper resolves the repository runtime from the installed skill path", async () => {

@@ -85,6 +85,113 @@ test("rejects missing dependencies and run_if references", () => {
   expectError(plan, "unknown_run_if_step");
 });
 
+test("validates dataflow consumes and produces", () => {
+  const result = validatePlan(
+    validPlan({
+      steps: [
+        {
+          step_id: "collect",
+          type: "command.verify",
+          depends_on: [],
+          verify: { commands: ["node --version"] },
+          produces: {
+            checks: { select: "$.verify.checks", schema: "command_checks/v1" }
+          }
+        },
+        {
+          step_id: "review",
+          type: "agent.review",
+          permission_profile: "reviewer_readonly",
+          input: { prompt: "Review command output" },
+          depends_on: ["collect"],
+          consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs", required: true, max_bytes: 20_000 }]
+        }
+      ]
+    })
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.plan.steps[1]?.consumes, [
+    { from: "collect", select: "$.verify.checks[*].stdout", as: "docs", required: true, max_bytes: 20_000 }
+  ]);
+  assert.equal(result.plan.steps[0]?.produces?.checks?.schema, "command_checks/v1");
+});
+
+test("rejects invalid dataflow references and aliases", () => {
+  expectError(
+    validPlan({
+      steps: [
+        { step_id: "collect", type: "command.verify", depends_on: [], verify: { commands: ["node --version"] } },
+        {
+          step_id: "review",
+          type: "agent.review",
+          depends_on: ["collect"],
+          consumes: [{ from: "missing", select: "$.verify.checks[*].stdout", as: "docs" }]
+        }
+      ]
+    }),
+    "unknown_consume_step"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        { step_id: "collect", type: "command.verify", depends_on: [], verify: { commands: ["node --version"] } },
+        {
+          step_id: "review",
+          type: "agent.review",
+          depends_on: ["collect"],
+          consumes: [
+            { from: "collect", select: "$.verify.checks[*].stdout", as: "docs" },
+            { from: "collect", select: "$.output.status", as: "docs" }
+          ]
+        }
+      ]
+    }),
+    "duplicate_consume_alias"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        { step_id: "collect", type: "command.verify", depends_on: [], verify: { commands: ["node --version"] } },
+        {
+          step_id: "review",
+          type: "agent.review",
+          depends_on: ["collect"],
+          consumes: [{ from: "collect", select: "$.verify.checks[0].stdout", as: "docs" }]
+        }
+      ]
+    }),
+    "invalid_artifact_selector"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        { step_id: "collect", type: "command.verify", depends_on: [], verify: { commands: ["node --version"] } },
+        {
+          step_id: "review",
+          type: "agent.review",
+          depends_on: [],
+          consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs" }]
+        }
+      ]
+    }),
+    "consume_not_upstream"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        { step_id: "collect", type: "command.verify", depends_on: [], verify: { commands: ["node --version"] } },
+        {
+          step_id: "review",
+          type: "agent.review",
+          depends_on: ["collect"],
+          consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs", max_bytes: 2_000_000 }]
+        }
+      ]
+    }),
+    "max_bytes_exceeds_host_limit"
+  );
+});
+
 test("rejects dependency cycles", () => {
   expectError(
     validPlan({
@@ -181,4 +288,21 @@ test("skill plan reference documents registered step types and permission profil
   for (const profile of listPermissionProfiles()) {
     assert.ok(reference.includes(`\`${profile.name}\``), `Missing permission profile ${profile.name} in plan reference.`);
   }
+});
+
+test("docs and skill references document dataflow fields", async () => {
+  const files = await Promise.all([
+    readFile("README.md", "utf8"),
+    readFile("skills/dynamic-workflow/SKILL.md", "utf8"),
+    readFile("skills/dynamic-workflow/references/plan.md", "utf8"),
+    readFile("skills/dynamic-workflow/examples/dataflow-review-summarize.md", "utf8"),
+    readFile("docs/07-js-first-dataflow-runtime.md", "utf8")
+  ]);
+  const combined = files.join("\n");
+  for (const term of ["consumes", "produces", "$.verify.checks[*].stdout", "StepContext", "agent.synthesize"]) {
+    assert.ok(combined.includes(term), `Missing dataflow docs term ${term}.`);
+  }
+  assert.match(files[0] ?? "", /dynamic-workflow/);
+  assert.match(files[0] ?? "", /command\("collect_docs"/);
+  assert.match(files[1] ?? "", /Use `consumes`/);
 });

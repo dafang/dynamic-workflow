@@ -1,20 +1,106 @@
 {
-  "manifest_version": "dynamic_workflow/compiled/v1",
+  "manifest_version": "dynamic_workflow/compiled/v2",
   "workflow_id": "dwf_example",
-  "nodes": [],
-  "dependencies": {},
-  "reverse_dependencies": {},
-  "ready_queue": [],
+  "nodes": [
+    {
+      "step_id": "collect_docs",
+      "type": "command.verify",
+      "input": {
+        "commands": ["sed -n '1,120p' README.md"]
+      },
+      "depends_on": [],
+      "reverse_dependencies": ["review_docs"],
+      "produces": {
+        "checks": {
+          "select": "$.verify.checks",
+          "schema": "command_checks/v1"
+        }
+      },
+      "permission_profile": "command_verifier",
+      "backend": "current",
+      "verify": {
+        "commands": ["sed -n '1,120p' README.md"]
+      },
+      "resource_locks": []
+    },
+    {
+      "step_id": "review_docs",
+      "type": "agent.review",
+      "input": {
+        "prompt": "Review collected documentation for inconsistencies and missing evidence."
+      },
+      "depends_on": ["collect_docs"],
+      "reverse_dependencies": ["summarize"],
+      "consumes": [
+        {
+          "from": "collect_docs",
+          "select": "$.verify.checks[*].stdout",
+          "as": "docs",
+          "required": true,
+          "max_bytes": 20000
+        }
+      ],
+      "permission_profile": "reviewer_readonly",
+      "backend": "current",
+      "resource_locks": []
+    },
+    {
+      "step_id": "summarize",
+      "type": "agent.synthesize",
+      "input": {
+        "prompt": "Summarize the review result with evidence."
+      },
+      "depends_on": ["review_docs"],
+      "reverse_dependencies": [],
+      "consumes": [
+        {
+          "from": "review_docs",
+          "select": "$.output.status",
+          "as": "review_status"
+        }
+      ],
+      "permission_profile": "synthesizer",
+      "backend": "current",
+      "resource_locks": []
+    }
+  ],
+  "dependencies": {
+    "collect_docs": [],
+    "review_docs": ["collect_docs"],
+    "summarize": ["review_docs"]
+  },
+  "reverse_dependencies": {
+    "collect_docs": ["review_docs"],
+    "review_docs": ["summarize"],
+    "summarize": []
+  },
+  "ready_queue": ["collect_docs"],
   "resource_locks": [],
   "writer_conflicts": {},
   "budget_summary": {
-    "declared_steps": 0,
-    "executable_nodes": 0
+    "declared_steps": 3,
+    "executable_nodes": 3
   },
   "original_plan": {
     "schema_version": "dynamic_workflow/run/v1",
     "workflow_id": "dwf_example",
     "kind": "mixed",
-    "steps": []
+    "steps": [
+      {
+        "step_id": "collect_docs",
+        "type": "command.verify",
+        "depends_on": []
+      },
+      {
+        "step_id": "review_docs",
+        "type": "agent.review",
+        "depends_on": ["collect_docs"]
+      },
+      {
+        "step_id": "summarize",
+        "type": "agent.synthesize",
+        "depends_on": ["review_docs"]
+      }
+    ]
   }
 }

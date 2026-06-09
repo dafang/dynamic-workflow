@@ -44,6 +44,8 @@ Optional:
 - `run_if`: condition evaluated before execution.
 - `strategy`: free-form strategy hint.
 - `verify`: verification spec.
+- `consumes`: optional array of upstream artifact selections injected into the step context.
+- `produces`: optional object naming stable output selections for downstream authors.
 
 Step budget fields:
 
@@ -52,6 +54,54 @@ Step budget fields:
 - `max_tokens`: maximum 1000000.
 
 `input.resource_scope` is optional. It sets the read/write lock scope for conflict detection. When omitted, the scope is `workspace`.
+
+## Dataflow Fields
+
+`depends_on` controls readiness only. It does not pass output content to another step. Use `consumes` when a downstream step needs upstream evidence.
+
+```yaml
+- step_id: collect_docs
+  type: command.verify
+  depends_on: []
+  verify:
+    commands:
+      - sed -n '1,120p' README.md
+  produces:
+    checks:
+      select: $.verify.checks
+      schema: command_checks/v1
+
+- step_id: review_docs
+  type: agent.review
+  depends_on: [collect_docs]
+  consumes:
+    - from: collect_docs
+      select: $.verify.checks[*].stdout
+      as: docs
+      required: true
+      max_bytes: 20000
+```
+
+`consumes` fields:
+
+- `from`: upstream step id. It must be a dependency upstream; control step ids are rewritten to terminal expanded nodes when unambiguous.
+- `select`: supported artifact selector. Current selector subset starts at `$`, supports dotted object fields, and supports array wildcard `[*]`, for example `$.verify.checks[*].stdout` and `$.output.status`.
+- `as`: context alias matching `[A-Za-z_][A-Za-z0-9_]*`.
+- `required`: optional boolean. Omitted means required. `false` records an empty source when the artifact or selector is missing.
+- `max_bytes`: optional positive integer up to 1000000. Omitted defaults to 20000. Oversized selected values are clipped deterministically and source metadata records `clipped`, `original_bytes`, and `selected_bytes`.
+
+`produces` fields:
+
+- Each key names a stable output contract such as `checks`.
+- `select`: selector for the produced value.
+- `schema`: optional schema label such as `command_checks/v1`.
+
+At runtime, each consuming step receives a `StepContext`:
+
+- `inputs`: JSON object keyed by consume alias.
+- `sources`: source metadata with alias, upstream step, selector, artifact path, clipping flag, and byte counts.
+
+Current `agent.*` artifacts record `context` and `context_sources`. `dw summarize` reports source metadata only; it does not print raw context payloads.
 
 ## Conditions
 
@@ -190,6 +240,7 @@ At compile time:
 
 - `depends_on: [repair_loop]` rewrites to the terminal expanded node, such as `repair_loop__round_3`.
 - `run_if.step: tournament` rewrites to the single terminal judge node.
+- `consumes.from: tournament` rewrites to the single terminal judge node.
 - Rewrites fail closed when a control step expands to zero terminal nodes or when a single-step reference is ambiguous.
 
 ## Permission Profiles
@@ -207,6 +258,8 @@ Permission profiles are validated against step type allowlists. Prompt text cann
 ## Current MVP Limits
 
 - Only backend `current` executes.
+- Compiled manifests use `dynamic_workflow/compiled/v2`; existing `dynamic_workflow/run/v1` plans without dataflow fields remain valid.
+- If `consumes` is absent, runtime behavior matches the old scheduling-only MVP.
 - Control steps compile before runtime; runtime executes concrete nodes.
 - `workflow.loop` is bounded and does not short-circuit early yet.
 - `human.approval` enters `waiting_user`; a full approve/reject/revise resume workflow is still host-dependent.

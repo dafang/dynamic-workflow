@@ -5,6 +5,9 @@ import type {
   JsonObject,
   JsonValue,
   StepBudget,
+  StepConsume,
+  StepProduce,
+  StepProduces,
   RunCondition,
   VerificationSpec,
   ValidationError,
@@ -15,6 +18,10 @@ import type {
 } from "./types.js";
 
 const CONDITION_OPS = new Set(["==", "!=", ">", ">=", "<", "<=", "exists", "not_exists"]);
+const DATAFLOW_ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PRODUCE_NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+const SELECTOR_SEGMENT = "(?:[A-Za-z_][A-Za-z0-9_]*|\\*)";
+const SELECTOR_PATTERN = new RegExp(`^\\$(?:\\.${SELECTOR_SEGMENT}(?:\\[\\*\\])?)*$`);
 
 export function validatePlan(input: unknown): ValidationResult {
   const errors: ValidationError[] = [];
@@ -99,6 +106,8 @@ export function validatePlan(input: unknown): ValidationResult {
     const runIf = readRunCondition(rawStep.run_if, `${path}.run_if`, stepId, errors);
     const stepBudget = readBudget(rawStep.budget, `${path}.budget`, errors, true);
     const inputObject = isRecord(rawStep.input) ? (rawStep.input as JsonObject) : undefined;
+    const consumes = readConsumes(rawStep.consumes, `${path}.consumes`, stepId, errors);
+    const produces = readProduces(rawStep.produces, `${path}.produces`, stepId, errors);
 
     if (rawType === "workflow.loop") {
       const loopInput = inputObject ?? {};
@@ -123,6 +132,8 @@ export function validatePlan(input: unknown): ValidationResult {
     };
     assignOptional(normalizedStep, "title", readOptionalString(rawStep, "title"));
     assignOptional(normalizedStep, "input", inputObject);
+    assignOptional(normalizedStep, "consumes", consumes);
+    assignOptional(normalizedStep, "produces", produces);
     assignOptional(normalizedStep, "backend", stepBackend === SUPPORTED_BACKEND ? stepBackend : undefined);
     assignOptional(normalizedStep, "budget", stepBudget);
     assignOptional(normalizedStep, "run_if", runIf);
@@ -333,6 +344,126 @@ function readVerificationSpec(value: unknown): VerificationSpec | undefined {
   return Object.keys(spec).length > 0 ? spec : undefined;
 }
 
+function readConsumes(
+  value: unknown,
+  path: string,
+  stepId: string,
+  errors: ValidationError[]
+): StepConsume[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push(withStepId({ code: "invalid_consumes", message: "consumes must be an array.", path }, stepId));
+    return undefined;
+  }
+  const consumes: StepConsume[] = [];
+  const aliases = new Set<string>();
+  for (const [index, rawConsume] of value.entries()) {
+    const itemPath = `${path}[${index}]`;
+    if (!isRecord(rawConsume)) {
+      errors.push(withStepId({ code: "invalid_consume", message: "consume entry must be an object.", path: itemPath }, stepId));
+      continue;
+    }
+    const from = readString(rawConsume, "from", errors, itemPath);
+    const select = readString(rawConsume, "select", errors, itemPath);
+    const alias = readString(rawConsume, "as", errors, itemPath);
+    if (!DATAFLOW_ALIAS.test(alias)) {
+      errors.push(withStepId({
+        code: "invalid_consume_alias",
+        message: `Consume alias ${alias} must match ${DATAFLOW_ALIAS.source}.`,
+        path: `${itemPath}.as`
+      }, stepId));
+    }
+    if (aliases.has(alias)) {
+      errors.push(withStepId({
+        code: "duplicate_consume_alias",
+        message: `Duplicate consume alias ${alias}.`,
+        path: `${itemPath}.as`
+      }, stepId));
+    }
+    aliases.add(alias);
+    if (!validateArtifactSelector(select)) {
+      errors.push(withStepId({
+        code: "invalid_artifact_selector",
+        message: `Unsupported artifact selector ${select}.`,
+        path: `${itemPath}.select`
+      }, stepId));
+    }
+    const required = typeof rawConsume.required === "boolean" ? rawConsume.required : undefined;
+    const maxBytes = readMaxBytes(rawConsume.max_bytes, `${itemPath}.max_bytes`, stepId, errors);
+    const consume: StepConsume = { from, select, as: alias };
+    assignOptional(consume, "required", required);
+    assignOptional(consume, "max_bytes", maxBytes);
+    consumes.push(consume);
+  }
+  return consumes;
+}
+
+function readProduces(
+  value: unknown,
+  path: string,
+  stepId: string,
+  errors: ValidationError[]
+): StepProduces | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    errors.push(withStepId({ code: "invalid_produces", message: "produces must be an object.", path }, stepId));
+    return undefined;
+  }
+  const produces: StepProduces = {};
+  for (const [name, rawProduce] of Object.entries(value)) {
+    const itemPath = `${path}.${name}`;
+    if (!PRODUCE_NAME.test(name)) {
+      errors.push(withStepId({
+        code: "invalid_produce_name",
+        message: `Produce name ${name} must match ${PRODUCE_NAME.source}.`,
+        path: itemPath
+      }, stepId));
+    }
+    if (!isRecord(rawProduce)) {
+      errors.push(withStepId({ code: "invalid_produce", message: "produce entry must be an object.", path: itemPath }, stepId));
+      continue;
+    }
+    const select = readString(rawProduce, "select", errors, itemPath);
+    if (!validateArtifactSelector(select)) {
+      errors.push(withStepId({
+        code: "invalid_artifact_selector",
+        message: `Unsupported artifact selector ${select}.`,
+        path: `${itemPath}.select`
+      }, stepId));
+    }
+    const produce: StepProduce = { select };
+    assignOptional(produce, "schema", readOptionalString(rawProduce, "schema"));
+    produces[name] = produce;
+  }
+  return Object.keys(produces).length > 0 ? produces : undefined;
+}
+
+function readMaxBytes(
+  value: unknown,
+  path: string,
+  stepId: string,
+  errors: ValidationError[]
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    errors.push(withStepId({ code: "invalid_max_bytes", message: `${path} must be a positive integer.`, path }, stepId));
+    return undefined;
+  }
+  if (value > HOST_LIMITS.context_max_bytes) {
+    errors.push(withStepId({
+      code: "max_bytes_exceeds_host_limit",
+      message: `${path}=${value} exceeds host maximum ${HOST_LIMITS.context_max_bytes}.`,
+      path
+    }, stepId));
+    return undefined;
+  }
+  return value;
+}
+
+export function validateArtifactSelector(selector: string): boolean {
+  return SELECTOR_PATTERN.test(selector);
+}
+
 function validateReferences(steps: WorkflowStep[], errors: ValidationError[]): void {
   const ids = new Set(steps.map((step) => step.step_id));
   for (const step of steps) {
@@ -354,7 +485,38 @@ function validateReferences(steps: WorkflowStep[], errors: ValidationError[]): v
         path: `${step.step_id}.run_if.step`
       });
     }
+    for (const consume of step.consumes ?? []) {
+      if (!ids.has(consume.from)) {
+        errors.push({
+          code: "unknown_consume_step",
+          message: `Step ${step.step_id} consumes from missing step ${consume.from}.`,
+          step_id: step.step_id,
+          path: `${step.step_id}.consumes`
+        });
+      } else if (!hasDependencyPath(step.step_id, consume.from, steps)) {
+        errors.push({
+          code: "consume_not_upstream",
+          message: `Step ${step.step_id} consumes from ${consume.from}, which must be a dependency upstream.`,
+          step_id: step.step_id,
+          path: `${step.step_id}.consumes`
+        });
+      }
+    }
   }
+}
+
+function hasDependencyPath(stepId: string, targetDependency: string, steps: WorkflowStep[]): boolean {
+  const byId = new Map(steps.map((step) => [step.step_id, step]));
+  const visited = new Set<string>();
+  const stack = [...(byId.get(stepId)?.depends_on ?? [])];
+  while (stack.length > 0) {
+    const dependency = stack.pop();
+    if (!dependency || visited.has(dependency)) continue;
+    if (dependency === targetDependency) return true;
+    visited.add(dependency);
+    stack.push(...(byId.get(dependency)?.depends_on ?? []));
+  }
+  return false;
 }
 
 function validateCycles(steps: WorkflowStep[], errors: ValidationError[]): void {

@@ -4,6 +4,8 @@ import { assertValidPlan } from "./validation.js";
 import type {
   JsonObject,
   RunCondition,
+  StepConsume,
+  StepProduces,
   StepType,
   VerificationSpec,
   WorkflowBudget,
@@ -18,6 +20,8 @@ export interface CompiledNode {
   input: JsonObject;
   depends_on: string[];
   reverse_dependencies: string[];
+  consumes?: StepConsume[];
+  produces?: StepProduces;
   permission_profile: string;
   backend: "current";
   run_if?: RunCondition;
@@ -36,7 +40,7 @@ export interface BudgetSummary {
 }
 
 export interface CompiledManifest {
-  manifest_version: "dynamic_workflow/compiled/v1";
+  manifest_version: "dynamic_workflow/compiled/v2";
   workflow_id: string;
   nodes: CompiledNode[];
   dependencies: Record<string, string[]>;
@@ -113,6 +117,8 @@ export function compilePlan(input: unknown, options: CompileOptions = {}): Compi
       resource_locks: locksByStep.get(step.step_id) ?? []
     };
     assignOptional(node, "title", step.title);
+    assignOptional(node, "consumes", step.consumes);
+    assignOptional(node, "produces", step.produces);
     assignOptional(node, "run_if", step.run_if);
     assignOptional(node, "verify", step.verify);
     const origin = typeof step.input?.control_origin === "string" ? step.input.control_origin : undefined;
@@ -121,7 +127,7 @@ export function compilePlan(input: unknown, options: CompileOptions = {}): Compi
   });
 
   return {
-    manifest_version: "dynamic_workflow/compiled/v1",
+    manifest_version: "dynamic_workflow/compiled/v2",
     workflow_id: originalPlan.workflow_id,
     nodes,
     dependencies,
@@ -187,6 +193,7 @@ function expandInclude(step: WorkflowStep, includeLibrary: Record<string, Workfl
       step_id: mappedId,
       depends_on: dependsOn,
       input: {
+        ...inheritedControlInput(step),
         ...(included.input ?? {}),
         control_origin: step.step_id,
         workflow_ref: workflowRef
@@ -214,10 +221,12 @@ function rewriteControlReferences(
       step.depends_on.flatMap((dependency) => terminalStepIdsFor(dependency, controlExpansions))
     );
     const rewrittenRunIf = rewriteRunIf(step.run_if, controlExpansions);
+    const rewrittenConsumes = rewriteConsumes(step.consumes, controlExpansions);
     const rewrittenInput = rewriteInputStepReferences(step.input, controlExpansions);
     if (
       arrayEquals(rewrittenDependencies, step.depends_on) &&
       rewrittenRunIf === step.run_if &&
+      rewrittenConsumes === step.consumes &&
       rewrittenInput === step.input
     ) {
       return step;
@@ -225,6 +234,9 @@ function rewriteControlReferences(
     const rewritten: WorkflowStep = { ...step, depends_on: rewrittenDependencies };
     if (rewrittenRunIf !== undefined) {
       rewritten.run_if = rewrittenRunIf;
+    }
+    if (rewrittenConsumes !== undefined) {
+      rewritten.consumes = rewrittenConsumes;
     }
     if (rewrittenInput !== undefined) {
       rewritten.input = rewrittenInput;
@@ -272,6 +284,23 @@ function rewriteRunIf(
   return { ...runIf, step: singleTerminalStepIdFor(runIf.step, controlExpansions, "run_if") };
 }
 
+function rewriteConsumes(
+  consumes: StepConsume[] | undefined,
+  controlExpansions: Map<string, ControlExpansion>
+): StepConsume[] | undefined {
+  if (!consumes) return consumes;
+  let rewritten: StepConsume[] | undefined;
+  consumes.forEach((consume, index) => {
+    if (!controlExpansions.has(consume.from)) return;
+    rewritten ??= consumes.map((entry) => ({ ...entry }));
+    rewritten[index] = {
+      ...consume,
+      from: singleTerminalStepIdFor(consume.from, controlExpansions, "consumes.from")
+    };
+  });
+  return rewritten ?? consumes;
+}
+
 function rewriteInputStepReferences(
   input: JsonObject | undefined,
   controlExpansions: Map<string, ControlExpansion>
@@ -310,6 +339,7 @@ function expandLoop(step: WorkflowStep): WorkflowStep[] {
       type: "agent.execute",
       permission_profile: "executor_writer",
       input: {
+        ...inheritedControlInput(step),
         prompt: `Execute loop round ${round} for ${step.step_id}.`,
         control_origin: step.step_id,
         loop_round: round,
@@ -342,6 +372,7 @@ function expandTournament(step: WorkflowStep): WorkflowStep[] {
       type: judgeType,
       permission_profile: "reviewer_readonly",
       input: {
+        ...inheritedControlInput(step),
         candidate_a: currentWinner,
         candidate_b: challenger,
         criteria: Array.isArray(step.input?.criteria) ? step.input.criteria : [],
@@ -354,6 +385,11 @@ function expandTournament(step: WorkflowStep): WorkflowStep[] {
     currentWinner = judgeId;
   }
   return judges;
+}
+
+function inheritedControlInput(step: WorkflowStep): JsonObject {
+  const resourceScope = step.input?.resource_scope;
+  return typeof resourceScope === "string" && resourceScope.trim() !== "" ? { resource_scope: resourceScope } : {};
 }
 
 function validateCompiledConditions(steps: WorkflowStep[]): void {
@@ -370,6 +406,11 @@ function validateCompiledConditions(steps: WorkflowStep[]): void {
       }
       if (!validateOutputPath(step.run_if.output_path)) {
         throw new Error(`Compiled run_if in ${step.step_id} has invalid output path ${step.run_if.output_path}.`);
+      }
+    }
+    for (const consume of step.consumes ?? []) {
+      if (!ids.has(consume.from)) {
+        throw new Error(`Compiled consume in ${step.step_id} references missing step ${consume.from}.`);
       }
     }
   }

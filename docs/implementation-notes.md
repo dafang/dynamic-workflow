@@ -47,7 +47,9 @@ This file maps the design documents to the 0.1.0 MVP implementation.
 
 ## 07-js-first-dataflow-runtime.md
 
-- Target direction: JS-first authoring captures workflow graph and artifact references, then runtime executes a compiled manifest IR.
-- Deferred: `consumes`, `produces`, `ArtifactRef`, `StepContext`, backend context injection, and manifest v2 are not implemented in 0.1.0.
-- Current limit: `depends_on` controls scheduling order only; downstream steps do not automatically receive upstream artifacts except for `run_if` condition evaluation.
-- Compatibility rule: existing `dynamic_workflow/run/v1` plans continue to run while dataflow fields are added.
+- Implemented: manifest v2 carries `consumes` and `produces`; validation checks selectors, aliases, upstream references, and context byte limits.
+- Implemented: runtime builds `StepContext` from upstream step artifacts, clips oversized selected values, passes context to the backend, and records `context` / `context_sources` in `agent.*` artifacts.
+- Implemented: JS harness captures `command(...)`, `agent.review(...)`, `agent.synthesize(...)`, `agent.execute(...)`, and `StepHandle.output(selector)` dataflow refs without executing arbitrary JavaScript.
+- Implemented: CLI lifecycle validates, compiles, runs, reviews, summarizes, and resumes dataflow plans; summaries expose source metadata but not raw context payloads.
+- Compatibility rule: existing `dynamic_workflow/run/v1` plans continue to run; if `consumes` is absent, runtime behaves like the scheduling-only MVP.
+- Current limit: external Codex, Claude, ACP, and remote backend adapters are still deliberately rejected; only backend `current` executes.

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .dynamic-workflow/
+.supergoal/
 coverage/
 .DS_Store
 npm-debug.log*

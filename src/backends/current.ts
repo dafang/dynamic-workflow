@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { Backend, BackendStepResult } from "../backend.js";
+import type { Backend, BackendStepResult, StepContext } from "../backend.js";
 import type { CompiledNode } from "../compiler.js";
 import type { JsonObject } from "../types.js";
 
@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 export class CurrentBackend implements Backend {
   readonly name = "current" as const;
 
-  async executeStep(node: CompiledNode): Promise<BackendStepResult> {
+  async executeStep(node: CompiledNode, context: StepContext): Promise<BackendStepResult> {
     if (node.type === "human.approval") {
       return {
         status: "waiting_user",
@@ -36,6 +36,8 @@ export class CurrentBackend implements Backend {
         step_id: node.step_id,
         type: node.type,
         summary: `Executed ${node.step_id} through current host boundary.`,
+        context: context.inputs,
+        context_sources: context.sources.map((source) => ({ ...source })),
         artifacts: []
       }
     };

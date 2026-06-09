@@ -7,7 +7,9 @@ export const HOST_LIMITS = {
   max_minutes: 480,
   step_max_rounds: 20,
   step_max_minutes: 240,
-  step_max_tokens: 1_000_000
+  step_max_tokens: 1_000_000,
+  context_max_bytes: 1_000_000,
+  context_default_max_bytes: 20_000
 } as const;
 
 export const SUPPORTED_BACKEND = "current";

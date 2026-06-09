@@ -1,8 +1,8 @@
 # Dynamic Workflow
 
-Typed, auditable workflow execution for complex agent work.
+JS-first, auditable workflow execution for complex agent work.
 
-Dynamic Workflow gives Codex or Claude a local workflow runtime for tasks that need explicit, reviewable steps. Instead of asking an agent to "remember the plan", the agent writes or selects a typed plan, validates it, compiles it into a dependency graph, runs it, and leaves durable evidence: manifest, trace, step artifacts, status, review, and summary.
+Dynamic Workflow gives Codex or Claude a local workflow runtime for tasks that need explicit, reviewable steps and explicit artifact handoff. Instead of asking an agent to "remember the plan", the agent captures or writes a workflow, validates it, compiles it into a manifest, runs it, and leaves durable evidence: manifest, trace, step artifacts, status, review, and summary.
 
 Use it when a task is too large for one prompt and you want proof that every branch, loop, verification command, and final audit actually ran.
 
@@ -29,16 +29,16 @@ Do not use it for:
 
 ```mermaid
 flowchart TD
-    User["You ask Codex / Claude<br/>for a complex workflow"] --> Agent["Agent writes or selects<br/>a typed plan"]
+    User["You ask Codex / Claude<br/>for a complex workflow"] --> Agent["Agent captures JS dataflow<br/>or selects typed IR"]
     Agent --> Validate["validate<br/>schema, references, budgets"]
-    Validate --> Compile["compile<br/>expand include / loop / tournament"]
+    Validate --> Compile["compile manifest<br/>data refs + graph"]
     Compile --> Run["run<br/>schedule ready steps"]
     Run --> Trace["trace + step artifacts"]
     Trace --> Review["review<br/>audit final state"]
     Review --> Summary["summarize<br/>safe user-facing result"]
 ```
 
-The important rule: the typed plan is the contract. Prompt prose can explain intent, but the runtime only executes what validates and compiles.
+The important rule: the compiled manifest is the execution contract. Prompt prose can explain intent, but the runtime only executes what validates and compiles. `depends_on` controls scheduling; `consumes` controls which upstream artifact data is injected into downstream context.
 
 ## Install
 
@@ -99,6 +99,33 @@ then run an adversarial review step before the final command.verify.
 ```
 
 Good fit because the workflow has clear phases: reproduce, fix, verify, review.
+
+When a downstream step needs upstream evidence, ask for explicit dataflow. The agent should prefer JS-first authoring where available:
+
+```js
+const docs = command("collect_docs", {
+  run: [
+    "sed -n '1,220p' README.md",
+    "sed -n '1,220p' skills/dynamic-workflow/SKILL.md",
+  ],
+});
+
+const review = agent.review("review_docs", {
+  prompt: "Review README/SKILL/template consistency. Return structured findings.",
+  context: {
+    docs: docs.output("$.verify.checks[*].stdout"),
+  },
+});
+
+agent.synthesize("summary", {
+  prompt: "Summarize the review with evidence.",
+  context: {
+    findings: review.output("$.output.status"),
+  },
+});
+```
+
+This captures to manifest v2 with `consumes` edges. YAML/JSON typed plans remain supported as an import/export IR and for direct CLI use.
 
 If your Codex version exposes local custom prompts, the installed compatibility prompt appears as:
 
@@ -214,6 +241,8 @@ Important fields:
 - `step_id`: stable id used by dependencies and traces.
 - `type`: registered step type, such as `agent.review`, `workflow.loop`, or `command.verify`.
 - `depends_on`: explicit step dependencies.
+- `consumes`: optional dataflow inputs selected from upstream step artifacts.
+- `produces`: optional stable output contract names for a step.
 - `run_if`: optional condition evaluated against a previous step's output object.
 - `verify.commands`: canonical command list for `command.verify`.
 - `permission_profile`: optional explicit profile; defaults come from the registry.
@@ -237,6 +266,21 @@ Run independent review or generation branches, then merge:
 - step_id: synthesize
   type: agent.synthesize
   depends_on: [review_gateway, review_runtime]
+```
+
+Use `consumes` when synthesis should receive upstream artifacts, not just wait for branches:
+
+```yaml
+- step_id: synthesize
+  type: agent.synthesize
+  depends_on: [review_gateway, review_runtime]
+  consumes:
+    - from: review_gateway
+      select: $.output.status
+      as: gateway_status
+    - from: review_runtime
+      select: $.output.status
+      as: runtime_status
 ```
 
 ### Adversarial Verification
@@ -325,9 +369,14 @@ The JS harness is a capture layer, not a Node sandbox. It turns supported SDK-lo
 Supported capture primitives:
 
 - `agent(...)`
+- `command(...)`
+- `agent.review(...)`
+- `agent.synthesize(...)`
+- `agent.execute(...)`
 - `parallel([...])`
 - `loop(...)`
 - `judge(...)`
+- `StepHandle.output(selector)` in declarative context objects
 
 Safety behavior:
 
@@ -336,10 +385,11 @@ Safety behavior:
 - Executable code that references host capabilities is rejected, including `fs`, `child_process`, `process`, `fetch`, `import`, `require`, `eval`, `Function`, `globalThis`, and computed member access such as `obj["constructor"]`.
 - Template expressions are rejected because they execute JavaScript.
 - Sequential `agent()` calls after fan-out depend on the previous terminal step; synthesizer calls merge current terminal steps.
+- Declarative `context: { alias: handle.output("$.path") }` captures both a scheduling dependency and a manifest `consumes` entry.
 
-The next design direction is JS-first authoring with manifest IR execution: JS should express workflow graph and artifact references, while the runtime executes a compiled manifest with explicit dataflow, trace, and resume semantics. See [docs/07-js-first-dataflow-runtime.md](./docs/07-js-first-dataflow-runtime.md).
+JS-first authoring with manifest IR execution is now the preferred direction: JS expresses the workflow graph and artifact references, while the runtime executes a compiled manifest with explicit dataflow, trace, and resume semantics. See [docs/07-js-first-dataflow-runtime.md](./docs/07-js-first-dataflow-runtime.md).
 
-Until manifest dataflow is implemented, typed YAML/JSON plans remain the executable MVP surface.
+Current capture support is intentionally conservative. Unsupported executable syntax fails closed instead of partially capturing a graph. Typed YAML/JSON plans remain executable and useful as advanced IR import/export.
 
 ## Runtime Artifacts
 
@@ -371,14 +421,15 @@ The current MVP has been exercised across:
 - `workflow.loop` bounded rounds.
 - Control dependency rewriting for `depends_on` and `run_if.step`.
 - `command.verify` with canonical `verify.commands`.
-- JS harness capture and denied-capability checks.
+- Manifest v2 `consumes`, `produces`, selected StepContext injection, and sanitized context source summaries.
+- JS harness capture, `StepHandle.output(...)` dataflow refs, and denied-capability checks.
 - CLI lifecycle: `validate`, `compile`, `run`, `status`, `review`, `summarize`, and `resume`.
 
 Known limits:
 
 - `agent.filter` is registered but not deeply exercised as a complex end-to-end pattern.
 - `human.approval` can enter `waiting_user`, but a full human-resume workflow is future work.
-- External backends are deliberately rejected.
+- Real external Codex, Claude, ACP, and remote backend adapters are deliberately rejected; only `current` executes.
 
 ## Version
 

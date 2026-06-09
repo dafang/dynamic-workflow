@@ -8,31 +8,43 @@ budget:
   max_subagents: 8
   max_rounds: 3
 steps:
-  - step_id: classify
-    type: agent.classify
-    permission_profile: classifier
+  - step_id: collect_docs
+    type: command.verify
+    permission_profile: command_verifier
     input:
-      prompt: Classify the request into implementation, review, or research.
+      commands:
+        - sed -n '1,120p' README.md
+    verify:
+      commands:
+        - sed -n '1,120p' README.md
+    produces:
+      checks:
+        select: $.verify.checks
+        schema: command_checks/v1
     depends_on: []
 
-  - step_id: execute
-    type: agent.execute
-    permission_profile: executor_writer
-    run_if:
-      step: classify
-      output_path: label
-      op: ==
-      value: implementation
-    input:
-      prompt: Execute the focused implementation task.
-    depends_on:
-      - classify
-
-  - step_id: review
+  - step_id: review_docs
     type: agent.review
     permission_profile: reviewer_readonly
     input:
-      prompt: Review the implementation output for bugs and missing tests.
-      review_target: execute
+      prompt: Review collected documentation for inconsistencies and missing evidence.
+    consumes:
+      - from: collect_docs
+        select: $.verify.checks[*].stdout
+        as: docs
+        required: true
+        max_bytes: 20000
     depends_on:
-      - execute
+      - collect_docs
+
+  - step_id: summarize
+    type: agent.synthesize
+    permission_profile: synthesizer
+    input:
+      prompt: Summarize the review result with evidence.
+    consumes:
+      - from: review_docs
+        select: $.output.status
+        as: review_status
+    depends_on:
+      - review_docs

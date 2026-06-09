@@ -2,8 +2,9 @@ import path from "node:path";
 
 import { auditRun, type AuditResult } from "./audit.js";
 import { createArtifactStore, readJson, writeStepArtifact } from "./artifacts.js";
-import type { Backend } from "./backend.js";
+import type { Backend, BackendStepResult } from "./backend.js";
 import { compilePlan, type CompiledManifest } from "./compiler.js";
+import { buildStepContext } from "./context.js";
 import { CurrentBackend } from "./backends/current.js";
 import { blockDownstream, getReadyStepIds, initialStepStates } from "./scheduler.js";
 import { RunStore, type RunRecord } from "./store.js";
@@ -64,7 +65,13 @@ export async function runWorkflow(planInput: unknown, options: RunWorkflowOption
       markers.push(`DW_STEP_START ${stepId}`);
       await appendTrace(tracePath, { event: "step_started", run_id: runId, step_id: stepId });
 
-      const result = await backend.executeStep(node);
+      const result: BackendStepResult = await buildStepContext({ runId, node, steps: record.steps })
+        .then((context) => backend.executeStep(node, context))
+        .catch((error) => ({
+          status: "failed" as const,
+          summary: (error as Error).message,
+          output: { status: "failed", step_id: stepId, reason: "context_error", message: (error as Error).message }
+        }));
       state.summary = result.summary;
       const output: JsonObject = {
         step_id: stepId,

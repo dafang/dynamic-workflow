@@ -11,6 +11,7 @@ import { compilePlan } from "../src/index.js";
 test("documents allowed SDK primitives and denied capabilities", () => {
   assert.deepEqual([...HARNESS_ALLOWED_PRIMITIVES], [
     "agent",
+    "command",
     "parallel",
     "pipeline",
     "loop",
@@ -48,6 +49,81 @@ return await agent("Merge findings", { role: "synthesizer", step_id: "synthesize
   assert.deepEqual(
     fromHarness.manifest.nodes.map((node) => ({ id: node.step_id, type: node.type, deps: node.depends_on })),
     fromYaml.nodes.map((node) => ({ id: node.step_id, type: node.type, deps: node.depends_on }))
+  );
+});
+
+test("captures command output refs as dataflow consumes", () => {
+  const source = `
+const docs = command("collect_docs", {
+  run: ["printf docs"]
+})
+const review = agent.review("review_docs", {
+  prompt: "Review docs",
+  context: {
+    docs: docs.output("$.verify.checks[*].stdout")
+  }
+})
+agent.synthesize("summary", {
+  prompt: "Summarize findings",
+  context: {
+    findings: review.output("$.output.status")
+  }
+})
+`;
+  const result = compileHarnessToPlan(source, "dwf_harness_dataflow");
+  assert.deepEqual(
+    result.plan.steps.map((step) => ({ id: step.step_id, type: step.type, deps: step.depends_on, consumes: step.consumes })),
+    [
+      { id: "collect_docs", type: "command.verify", deps: [], consumes: undefined },
+      {
+        id: "review_docs",
+        type: "agent.review",
+        deps: ["collect_docs"],
+        consumes: [{ from: "collect_docs", select: "$.verify.checks[*].stdout", as: "docs" }]
+      },
+      {
+        id: "summary",
+        type: "agent.synthesize",
+        deps: ["review_docs"],
+        consumes: [{ from: "review_docs", select: "$.output.status", as: "findings" }]
+      }
+    ]
+  );
+  assert.deepEqual(result.manifest.nodes.find((node) => node.step_id === "review_docs")?.consumes, [
+    { from: "collect_docs", select: "$.verify.checks[*].stdout", as: "docs" }
+  ]);
+});
+
+test("captures fan-out data refs with dependency order from context capture", () => {
+  const source = `
+const gateway = agent.review("review_gateway", { prompt: "Review gateway" })
+const runtime = agent.review("review_runtime", { prompt: "Review runtime" })
+agent.synthesize("synthesize", {
+  prompt: "Merge findings",
+  context: {
+    gateway: gateway.output("$.output.status"),
+    runtime: runtime.output("$.output.status")
+  }
+})
+`;
+  const result = compileHarnessToPlan(source, "dwf_harness_fanout_dataflow");
+  assert.deepEqual(result.manifest.dependencies.synthesize, ["review_gateway", "review_runtime"]);
+  assert.deepEqual(result.manifest.nodes.find((node) => node.step_id === "synthesize")?.consumes, [
+    { from: "review_gateway", select: "$.output.status", as: "gateway" },
+    { from: "review_runtime", select: "$.output.status", as: "runtime" }
+  ]);
+});
+
+test("rejects unsupported harness syntax before producing a partial plan", () => {
+  assert.throws(
+    () =>
+      compileHarnessToPlan(`
+const docs = command("collect_docs", { run: ["printf docs"] })
+if (docs) {
+  agent.review("review_docs", { context: { docs: docs.output("$.output.status") } })
+}
+`),
+    /Harness unsupported syntax: if/
   );
 });
 

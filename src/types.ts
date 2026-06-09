@@ -65,12 +65,32 @@ export interface VerificationSpec {
   output_schema?: JsonObject;
 }
 
+export interface ArtifactRef {
+  from: string;
+  select: string;
+  required?: boolean;
+  max_bytes?: number;
+}
+
+export interface StepConsume extends ArtifactRef {
+  as: string;
+}
+
+export interface StepProduce {
+  select: string;
+  schema?: string;
+}
+
+export type StepProduces = Record<string, StepProduce>;
+
 export interface WorkflowStep {
   step_id: string;
   type: StepType;
   title?: string;
   input?: JsonObject;
   depends_on: string[];
+  consumes?: StepConsume[];
+  produces?: StepProduces;
   permission_profile?: PermissionProfileName;
   backend?: WorkflowBackend;
   budget?: StepBudget;

@@ -28,6 +28,48 @@ test("compiles fan-out branches with deterministic ready queue and synthesize de
   assert.equal(manifest.budget_summary.executable_nodes, 3);
 });
 
+test("compiles dataflow consumes and produces into manifest v2", () => {
+  const manifest = compilePlan(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["node --version"] },
+        produces: {
+          checks: { select: "$.verify.checks", schema: "command_checks/v1" }
+        }
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: ["collect"],
+        input: { prompt: "Review command output" },
+        consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs", required: true }]
+      }
+    ])
+  );
+  assert.equal(manifest.manifest_version, "dynamic_workflow/compiled/v2");
+  assert.deepEqual(manifest.nodes.find((node) => node.step_id === "review")?.consumes, [
+    { from: "collect", select: "$.verify.checks[*].stdout", as: "docs", required: true }
+  ]);
+  assert.equal(manifest.nodes.find((node) => node.step_id === "collect")?.produces?.checks?.select, "$.verify.checks");
+});
+
+test("keeps legacy plans free of optional dataflow fields", () => {
+  const manifest = compilePlan(
+    plan([
+      { step_id: "review", type: "agent.review", depends_on: [] },
+      { step_id: "synthesize", type: "agent.synthesize", depends_on: ["review"] }
+    ])
+  );
+  assert.equal(manifest.manifest_version, "dynamic_workflow/compiled/v2");
+  assert.equal(Object.hasOwn(manifest.nodes[0] ?? {}, "consumes"), false);
+  assert.equal(Object.hasOwn(manifest.nodes[0] ?? {}, "produces"), false);
+  assert.equal(Object.hasOwn(manifest.original_plan.steps[0] ?? {}, "consumes"), false);
+  assert.equal(Object.hasOwn(manifest.original_plan.steps[0] ?? {}, "produces"), false);
+});
+
 test("expands allowlisted workflow includes and rejects unknown refs", () => {
   const manifest = compilePlan(
     plan([
@@ -57,6 +99,58 @@ test("expands allowlisted workflow includes and rejects unknown refs", () => {
       ),
     /Unsupported workflow.include/
   );
+});
+
+test("propagates control resource scopes to expanded writer nodes", () => {
+  const manifest = compilePlan(
+    plan([
+      {
+        step_id: "feature_flow",
+        type: "workflow.include",
+        depends_on: [],
+        input: { workflow_ref: "builtin.feature", resource_scope: "feature-workspace" }
+      },
+      {
+        step_id: "bugfix_flow",
+        type: "workflow.include",
+        depends_on: [],
+        input: { workflow_ref: "builtin.bugfix", resource_scope: "bugfix-workspace" }
+      },
+      {
+        step_id: "repair_loop",
+        type: "workflow.loop",
+        depends_on: ["feature_flow"],
+        input: { max_rounds: 2, stop_condition: "tests_pass", resource_scope: "repair-workspace" }
+      }
+    ])
+  );
+  assert.equal(manifest.nodes.find((node) => node.step_id === "feature_flow__implement")?.input.resource_scope, "feature-workspace");
+  assert.equal(manifest.nodes.find((node) => node.step_id === "bugfix_flow__fix")?.input.resource_scope, "bugfix-workspace");
+  assert.equal(manifest.nodes.find((node) => node.step_id === "repair_loop__round_1")?.input.resource_scope, "repair-workspace");
+  assert.deepEqual(manifest.writer_conflicts, {});
+});
+
+test("rewrites consumes from workflow.include controls to terminal expanded nodes", () => {
+  const manifest = compilePlan(
+    plan([
+      {
+        step_id: "feature_flow",
+        type: "workflow.include",
+        depends_on: [],
+        input: { workflow_ref: "builtin.feature" }
+      },
+      {
+        step_id: "summarize",
+        type: "agent.synthesize",
+        input: { resource_scope: "summary" },
+        depends_on: ["feature_flow"],
+        consumes: [{ from: "feature_flow", select: "$.output.status", as: "review_status" }]
+      }
+    ])
+  );
+  assert.deepEqual(manifest.nodes.find((node) => node.step_id === "summarize")?.consumes, [
+    { from: "feature_flow__review", select: "$.output.status", as: "review_status" }
+  ]);
 });
 
 test("rewrites dependencies on workflow.include controls to terminal expanded nodes", () => {

@@ -69,6 +69,165 @@ test("command.verify executes commands declared in verify.commands", async () =>
   assert.equal(artifact.output.checks[0]?.exit_code, 0);
 });
 
+test("runtime injects command output into downstream agent context", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["printf docs-context"] }
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: ["collect"],
+        input: { prompt: "Review docs" },
+        consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs" }]
+      }
+    ]),
+    { rootDir, runId: "run_context_injection" }
+  );
+  assert.equal(result.record.state, "completed");
+  const text = await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8");
+  const artifact = JSON.parse(text) as {
+    output: { context: { docs: string[] }; context_sources: Array<{ alias: string; from_step: string; selected_path: string }> };
+  };
+  assert.deepEqual(artifact.output.context.docs, ["docs-context"]);
+  assert.deepEqual(artifact.output.context_sources[0], {
+    alias: "docs",
+    from_step: "collect",
+    output_path: path.join(result.record.run_dir, "steps", "collect.json"),
+    selected_path: "$.verify.checks[*].stdout",
+    required: true,
+    clipped: false,
+    original_bytes: 16,
+    selected_bytes: 16
+  });
+});
+
+test("missing required context fails step and blocks downstream", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["printf ready"] }
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: ["collect"],
+        consumes: [{ from: "collect", select: "$.output.missing", as: "missing" }]
+      },
+      {
+        step_id: "synthesize",
+        type: "agent.synthesize",
+        depends_on: ["review"]
+      }
+    ]),
+    { rootDir, runId: "run_required_context_missing" }
+  );
+  assert.equal(result.record.state, "failed");
+  assert.equal(result.record.steps.review?.state, "failed");
+  assert.equal(result.record.steps.synthesize?.state, "blocked");
+  const text = await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8");
+  assert.match(text, /context_error/);
+});
+
+test("optional missing context records empty source without failing", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["printf ready"] }
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: ["collect"],
+        consumes: [{ from: "collect", select: "$.output.missing", as: "optional_docs", required: false }]
+      }
+    ]),
+    { rootDir, runId: "run_optional_context_missing" }
+  );
+  assert.equal(result.record.state, "completed");
+  const text = await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8");
+  const artifact = JSON.parse(text) as {
+    output: { context: Record<string, unknown>; context_sources: Array<{ alias: string; required: boolean; selected_path: string }> };
+  };
+  assert.deepEqual(artifact.output.context, {});
+  assert.equal(artifact.output.context_sources[0]?.alias, "optional_docs");
+  assert.equal(artifact.output.context_sources[0]?.required, false);
+  assert.match(artifact.output.context_sources[0]?.selected_path ?? "", /missing_selector/);
+});
+
+test("context clipping records stable byte metadata", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["printf abcdefghij"] }
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: ["collect"],
+        consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs", max_bytes: 5 }]
+      }
+    ]),
+    { rootDir, runId: "run_context_clip" }
+  );
+  assert.equal(result.record.state, "completed");
+  const text = await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8");
+  const artifact = JSON.parse(text) as {
+    output: { context: { docs: string }; context_sources: Array<{ clipped: boolean; original_bytes: number; selected_bytes: number }> };
+  };
+  assert.equal(artifact.output.context.docs, "[\"abc");
+  assert.equal(artifact.output.context_sources[0]?.clipped, true);
+  assert.equal(artifact.output.context_sources[0]?.original_bytes, 14);
+  assert.equal(artifact.output.context_sources[0]?.selected_bytes, 5);
+});
+
+test("context clipping does not split multibyte characters", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "collect",
+        type: "command.verify",
+        depends_on: [],
+        verify: { commands: ["node -e \"process.stdout.write('\\u4f60\\u597d\\u4e16\\u754c')\""] }
+      },
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: ["collect"],
+        consumes: [{ from: "collect", select: "$.verify.checks[*].stdout", as: "docs", max_bytes: 6 }]
+      }
+    ]),
+    { rootDir, runId: "run_context_unicode_clip" }
+  );
+  assert.equal(result.record.state, "completed");
+  const text = await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8");
+  const artifact = JSON.parse(text) as {
+    output: { context: { docs: string }; context_sources: Array<{ clipped: boolean; selected_bytes: number }> };
+  };
+  assert.equal(artifact.output.context.docs, "[\"\u4f60");
+  assert.equal(artifact.output.context.docs.includes("\uFFFD"), false);
+  assert.equal(artifact.output.context_sources[0]?.clipped, true);
+  assert.ok((artifact.output.context_sources[0]?.selected_bytes ?? 0) <= 6);
+});
+
 test("command.verify fails validation when no commands are declared", () => {
   assert.throws(
     () =>

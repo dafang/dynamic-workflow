@@ -1,6 +1,6 @@
 # JS-First Dataflow Runtime
 
-本文把下一阶段方向定清楚：Dynamic Workflow 应该从 typed YAML-first 演进为 JS-first authoring，但执行、审计和恢复仍由 manifest IR 驱动。
+本文记录 Dynamic Workflow 从 typed YAML-first 演进到 JS-first authoring 的 dataflow runtime。执行、审计和恢复仍由 manifest IR 驱动。
 
 ## 1. 问题
 
@@ -33,7 +33,7 @@ workflow.js
 
 其中：
 
-- `workflow.js` 是 authoring DSL，负责表达组合、分支、循环、数据引用。
+- `workflow.js` 是 authoring DSL，负责表达组合和数据引用。当前实现支持 `command(...)`、`agent.review(...)`、`agent.synthesize(...)`、`agent.execute(...)` 和 `StepHandle.output(selector)` 的保守 capture。
 - `compiled_manifest.json` 是执行 IR，也是审计和恢复的唯一依据。
 - YAML/JSON typed plan 是可选导入导出格式，不是主入口。
 - runtime 不恢复 JS call stack；runtime 恢复 manifest state 和 artifact store。
@@ -107,10 +107,10 @@ Rules:
 
 - `depends_on` controls readiness only.
 - `consumes` controls context injection.
-- Every `consumes.from` must reference an upstream node or a declared external artifact.
+- Every `consumes.from` must reference an upstream node. Control step ids are rewritten to terminal expanded nodes when unambiguous.
 - Every `select` must be valid against the source artifact at runtime.
 - `required: true` fails the step if the source path is absent.
-- Large context is clipped by policy and recorded in trace.
+- Large context is clipped by policy and recorded in source metadata.
 
 ## 5. Step Context
 
@@ -118,15 +118,18 @@ Before executing a node, runtime builds a `StepContext`:
 
 ```ts
 interface StepContext {
-  runId: string;
-  stepId: string;
+  run_id: string;
+  step_id: string;
   inputs: Record<string, JsonValue>;
   sources: Array<{
     alias: string;
-    fromStep: string;
-    outputPath: string;
-    selectedPath: string;
+    from_step: string;
+    output_path: string;
+    selected_path: string;
+    required: boolean;
     clipped: boolean;
+    original_bytes: number;
+    selected_bytes: number;
   }>;
 }
 ```
@@ -151,7 +154,7 @@ Agent backends receive:
 - output schema
 - permission profile
 
-Command backends may receive context through safe templating only when explicitly declared.
+The current backend records selected context aliases and source metadata in `agent.*` artifacts. `command.verify` remains command-driven; command templating from context is not implemented.
 
 ## 6. Produces
 
@@ -188,9 +191,9 @@ docs.output("$.verify.checks[*].stdout")
 
 ## 7. Agent Step Semantics
 
-The current MVP marks `agent.*` steps as generic succeeded results. That is not enough for a workflow engine.
+The current backend still marks `agent.*` steps as generic succeeded results, but it now records explicit consumed context in artifacts. Real external agent adapters remain future work.
 
-Target behavior:
+Target behavior for future external adapters:
 
 - `agent.review` consumes explicit context and returns structured findings.
 - `agent.synthesize` consumes explicit findings/artifacts and returns a final structured summary.
@@ -212,7 +215,7 @@ Prompt text cannot grant extra permissions.
 
 ## 8. Branches, Loops, And Tournaments
 
-JS authoring should make complex patterns natural:
+JS authoring should eventually make complex patterns natural. Current implemented JS capture is limited to declarative step calls and context refs; the following branch/loop/tournament JS examples are future design examples, while typed YAML/JSON control steps are executable today.
 
 ```js
 const label = agent.classify("classify", {
@@ -246,7 +249,7 @@ const winner = tournament("choose_design", candidates, {
 });
 ```
 
-The captured manifest expands these into concrete nodes and explicit `consumes` edges.
+The future captured manifest will expand these into concrete nodes and explicit `consumes` edges.
 
 ## 9. Safety Boundary
 
@@ -285,34 +288,34 @@ If `workflow.js` changes, create a new run unless the user explicitly requests a
 
 ## 11. Migration Path
 
-### Phase 1: Dataflow IR
+### Implemented: Dataflow IR
 
 - Add `consumes` and `produces` to types, validation, compiler, manifest, and docs.
 - Add `StepContext` construction from step artifacts.
 - Keep YAML/JSON authoring working.
 
-### Phase 2: Context Injection
+### Implemented: Context Injection
 
 - Change backend interface to `executeStep(node, context)`.
 - Make `agent.*` artifacts record the consumed aliases.
 - Add tests proving downstream steps receive upstream command output.
 
-### Phase 3: JS DSL Capture
+### Implemented: JS DSL Capture
 
-- Add `workflow.js` authoring with `command`, `agent`, `parallel`, `loop`, `tournament`, `when`.
+- Add `workflow.js` authoring capture for `command`, `agent.review`, `agent.synthesize`, and `agent.execute`.
 - `StepHandle.output()` creates `ArtifactRef`.
 - Compile captured graph to manifest v2.
 
-### Phase 4: Real Agent Adapter
+### Deferred: Real Agent Adapter
 
 - Replace fake `agent.*` success with a host or Paseo/Codex adapter.
 - Validate structured outputs.
 - Enforce permission profiles.
 
-### Phase 5: Deprecate YAML-First Docs
+### Deferred: Full JS Control Capture
 
-- README quickstart becomes JS-first.
-- YAML/JSON remains documented as advanced IR import/export.
+- Branches, loop callbacks, tournament helpers, and `when(...)` capture are not implemented yet.
+- YAML/JSON remains supported as typed IR import/export and as the direct CLI surface.
 
 ## 12. Compatibility
 
