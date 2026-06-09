@@ -16,7 +16,7 @@ dynamic-workflow/
 ├── src/                               runtime, compiler, validation, CLI commands
 ├── tests/                             node:test suite
 ├── docs/                              design and implementation notes
-├── skills/dynamic-workflow/            Codex/Claude skill payload
+├── skills/dynamic-workflow/            Codex/Claude skill payload, including bundled runtime
 ├── .claude-plugin/                    Claude plugin manifests
 ├── README.md                          final-user entrypoint
 └── AGENTS.md                          maintainer and agent rules
@@ -69,6 +69,7 @@ Then clean the temp dir, or use a shell `trap`.
 - AGENTS.md is for maintainers and agents: build/test commands, invariants, validation rounds, release notes.
 - Update `skills/dynamic-workflow/SKILL.md` when the skill workflow changes.
 - Update `skills/dynamic-workflow/references/` when plan-authoring semantics change.
+- `npm run build` regenerates `skills/dynamic-workflow/runtime/`; this bundled runtime is committed so copied skill installs work without a repository checkout.
 - Keep examples runnable through `node bin/dw.mjs validate`.
 - Do not document an external backend as supported until it is executable and tested.
 
@@ -116,11 +117,11 @@ Known MVP limits:
 5. For workflow-mode changes, run at least one real CLI plan with `--root "$(mktemp -d)/runtime"` and confirm `DW_RUN_COMPLETE`.
 6. For control-flow changes, inspect the compiled manifest for dangling `depends_on` and `run_if.step`.
 7. For harness changes, test both denied executable code and allowed prompt/comment text.
-8. Check that no `.dynamic-workflow`, `.DS_Store`, temporary plans, or runtime directories were left in the repo.
+8. Check that no `.dynamic-workflow`, `.DS_Store`, temporary plans, or ad hoc runtime directories were left in the repo. The committed `skills/dynamic-workflow/runtime/` payload is expected.
 
 ## Install Sync Notes
 
-Codex install is usually a symlink or one-way copy into `~/.agents/skills/dynamic-workflow`; older local setups may also use `~/.codex/skills/dynamic-workflow`. After changing the skill payload, verify the local Codex install points at or matches `skills/dynamic-workflow/`.
+Codex install is usually a one-way copy into `~/.agents/skills/dynamic-workflow`; older local setups may also use `~/.codex/skills/dynamic-workflow`. Symlinks are acceptable for local development, but copied installs are the user distribution model. After changing the skill payload or bundled runtime, verify the local Codex install matches `skills/dynamic-workflow/` and that `<installed_skill>/scripts/dw validate <installed_skill>/templates/plan.yaml` works without `.runtime-root`.
 
 Claude plugin manifests live under `.claude-plugin/`. If this project is published through a plugin flow, keep `package.json`, plugin manifests, changelog/release notes, README version notes, and the shipped skill payload aligned.
 

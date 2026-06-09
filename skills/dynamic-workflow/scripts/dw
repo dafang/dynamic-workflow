@@ -5,12 +5,14 @@ if command -v realpath >/dev/null 2>&1; then
   SCRIPT_DIR=$(dirname -- "$(realpath "$0")")
 fi
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
-if [ ! -f "$ROOT/bin/dw.mjs" ] && [ -f "$SCRIPT_DIR/../.runtime-root" ]; then
+if [ -f "$SCRIPT_DIR/../runtime/bin/dw.mjs" ]; then
+  ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../runtime" && pwd)
+elif [ ! -f "$ROOT/bin/dw.mjs" ] && [ -f "$SCRIPT_DIR/../.runtime-root" ]; then
   ROOT=$(cat "$SCRIPT_DIR/../.runtime-root")
 fi
 if [ ! -f "$ROOT/bin/dw.mjs" ]; then
   echo "dynamic-workflow runtime not found at $ROOT/bin/dw.mjs" >&2
-  echo "Install this skill with a .runtime-root file, as a symlink to the repository, or run node <dynamic-workflow-repo>/bin/dw.mjs directly." >&2
+  echo "Install this skill with bundled runtime, a .runtime-root file, as a symlink to the repository, or run node <dynamic-workflow-repo>/bin/dw.mjs directly." >&2
   exit 2
 fi
 exec node "$ROOT/bin/dw.mjs" "$@"

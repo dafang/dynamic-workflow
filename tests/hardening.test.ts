@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -109,10 +109,11 @@ test("run_if false skips dependent step and downstream can proceed", async () =>
   assert.equal(result.audit.ok, true);
 });
 
-test("skill payload excludes runtime artifacts", async () => {
+test("skill payload includes bundled runtime and excludes run artifacts", async () => {
   const entries = await readdir(skillDir);
   assert.ok(entries.includes("SKILL.md"));
   assert.ok(!entries.includes(".dynamic-workflow"));
+  assert.ok(entries.includes("runtime"));
 });
 
 test("skill bundled plan template is the documented authoring base and validates", async () => {
@@ -132,17 +133,25 @@ test("skill bundled plan template is the documented authoring base and validates
   assert.match(compiled.stdout, /"produces"/);
 });
 
-test("skill dw wrapper resolves the repository runtime from the installed skill path", async () => {
+test("skill dw wrapper resolves bundled runtime from copied and symlinked installs", async () => {
   const wrapperPath = path.join(skillDir, "scripts/dw");
   const result = await execFileAsync(wrapperPath, ["validate", path.join(skillDir, "templates/plan.yaml")]);
   assert.match(result.stdout, /valid dwf_example steps=3/);
 
   const installRoot = await mkdtemp(path.join(os.tmpdir(), "dw-skill-install-"));
   const installedSkill = path.join(installRoot, "dynamic-workflow");
-  await symlink(skillDir, installedSkill);
-  const installedResult = await execFileAsync(path.join(installedSkill, "scripts/dw"), [
+  await cp(skillDir, installedSkill, { recursive: true });
+  const copiedResult = await execFileAsync(path.join(installedSkill, "scripts/dw"), [
     "validate",
     path.join(installedSkill, "templates/plan.yaml")
   ]);
-  assert.match(installedResult.stdout, /valid dwf_example steps=3/);
+  assert.match(copiedResult.stdout, /valid dwf_example steps=3/);
+
+  const linkedSkill = path.join(installRoot, "dynamic-workflow-linked");
+  await symlink(skillDir, linkedSkill);
+  const linkedResult = await execFileAsync(path.join(linkedSkill, "scripts/dw"), [
+    "validate",
+    path.join(linkedSkill, "templates/plan.yaml")
+  ]);
+  assert.match(linkedResult.stdout, /valid dwf_example steps=3/);
 });

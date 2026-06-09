@@ -42,9 +42,9 @@ The important rule: the compiled manifest is the execution contract. Prompt pros
 
 ## Install
 
-If Dynamic Workflow is already installed as a Codex or Claude skill, skip to the quickstart. The agent will use the runtime commands behind the scenes.
+If Dynamic Workflow is already installed as a Codex or Claude skill, skip to the quickstart. The installed skill includes its own runtime under `runtime/`; users do not need to clone this repository.
 
-If you are installing from this repository, the runtime needs Node.js 20 or newer and a local build:
+If you are installing from this repository as a maintainer, the runtime needs Node.js 20 or newer and a local build. The build refreshes the bundled skill runtime:
 
 ```sh
 npm install
@@ -53,14 +53,7 @@ npm run build
 
 ### Codex
 
-Install the skill by symlinking the skill directory after the local build exists. Symlink install is recommended because the bundled `scripts/dw` wrapper can resolve back to this repository's runtime:
-
-```sh
-mkdir -p ~/.agents/skills
-ln -s /path/to/dynamic-workflow/skills/dynamic-workflow ~/.agents/skills/dynamic-workflow
-```
-
-For a one-way copy instead:
+Install the skill by copying the built skill directory:
 
 ```sh
 mkdir -p ~/.agents/skills
@@ -68,13 +61,19 @@ rm -rf ~/.agents/skills/dynamic-workflow
 cp -R /path/to/dynamic-workflow/skills/dynamic-workflow ~/.agents/skills/dynamic-workflow
 ```
 
-Copy install only copies the skill instructions and bundled templates. Keep the repository checkout and build available, because the runtime still lives at `/path/to/dynamic-workflow/bin/dw.mjs`.
+Older local Codex setups may also scan `~/.codex/skills`:
 
-Restart Codex after installing or updating the skill. Older local Codex setups may also scan `~/.codex/skills`; current Codex skill docs use `~/.agents/skills`.
+```sh
+mkdir -p ~/.codex/skills
+rm -rf ~/.codex/skills/dynamic-workflow
+cp -R /path/to/dynamic-workflow/skills/dynamic-workflow ~/.codex/skills/dynamic-workflow
+```
+
+Restart Codex after installing or updating the skill. Symlink installs are useful for local development, but copied installs are the expected user distribution model because all required runtime files live inside the skill directory.
 
 ### Claude
 
-Claude users can install with the `.claude-plugin/` manifests when this repo is published through a Claude plugin flow. The distributed skill delegates to `bin/dw.mjs`; it does not contain a second runtime.
+Claude users can install with the `.claude-plugin/` manifests when this repo is published through a Claude plugin flow. A copied install should include the same `skills/dynamic-workflow/runtime/` payload.
 
 ## Quickstart In Codex Or Claude
 
@@ -169,7 +168,7 @@ Good fit because the workflow needs conditional branches, multiple verification 
 For any of these requests, the agent must:
 
 1. Resolve the skill directory containing `SKILL.md`.
-2. Resolve the package root containing `bin/dw.mjs`.
+2. Use `<skill_dir>/scripts/dw`, which resolves the bundled runtime at `<skill_dir>/runtime/bin/dw.mjs`.
 3. Write or select a typed plan from the skill template, then adapt it to the task.
 4. Run `validate`.
 5. Run `compile` and show a concise manifest summary.
@@ -195,20 +194,20 @@ DW_RUN_COMPLETE
 The skill uses the same CLI directly:
 
 ```sh
-node /path/to/dynamic-workflow/bin/dw.mjs validate /path/to/dynamic-workflow/skills/dynamic-workflow/templates/plan.yaml
-node /path/to/dynamic-workflow/bin/dw.mjs compile /path/to/dynamic-workflow/skills/dynamic-workflow/templates/plan.yaml
-node /path/to/dynamic-workflow/bin/dw.mjs run /path/to/dynamic-workflow/skills/dynamic-workflow/templates/plan.yaml
-node /path/to/dynamic-workflow/bin/dw.mjs status <run-id>
-node /path/to/dynamic-workflow/bin/dw.mjs review <run-id>
-node /path/to/dynamic-workflow/bin/dw.mjs summarize <run-id>
-node /path/to/dynamic-workflow/bin/dw.mjs resume <run-id>
+~/.agents/skills/dynamic-workflow/scripts/dw validate ~/.agents/skills/dynamic-workflow/templates/plan.yaml
+~/.agents/skills/dynamic-workflow/scripts/dw compile ~/.agents/skills/dynamic-workflow/templates/plan.yaml
+~/.agents/skills/dynamic-workflow/scripts/dw run ~/.agents/skills/dynamic-workflow/templates/plan.yaml
+~/.agents/skills/dynamic-workflow/scripts/dw status <run-id>
+~/.agents/skills/dynamic-workflow/scripts/dw review <run-id>
+~/.agents/skills/dynamic-workflow/scripts/dw summarize <run-id>
+~/.agents/skills/dynamic-workflow/scripts/dw resume <run-id>
 ```
 
 For throwaway experiments, isolate runtime output:
 
 ```sh
 tmpdir=$(mktemp -d)
-node bin/dw.mjs run my-plan.yaml --root "$tmpdir/runtime"
+~/.agents/skills/dynamic-workflow/scripts/dw run my-plan.yaml --root "$tmpdir/runtime"
 ```
 
 With `--root <dir>`, runs are written under `<dir>/runs/<run-id>/`. Without it, runtime artifacts default to `.dynamic-workflow/runs/<run-id>/`.

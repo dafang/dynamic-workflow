@@ -9,17 +9,17 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 
 ## Required Flow
 
-1. Resolve two paths separately:
-   - Skill directory: the directory containing this `SKILL.md`.
-   - Package root: the repository/runtime root containing `package.json` and `bin/dw.mjs`.
+1. Resolve the skill directory containing this `SKILL.md`.
+   - Use `<skill_dir>/scripts/dw` for all CLI operations. The wrapper prefers the bundled runtime at `<skill_dir>/runtime/bin/dw.mjs`.
+   - A source repository checkout is only a development fallback, not a user-install requirement.
 2. Write or select a typed plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, read `<skill_dir>/references/plan.md` for the supported step types and fields.
    - Prefer explicit dataflow when a downstream `agent.review`, `agent.synthesize`, or `agent.execute` needs upstream evidence: add `consumes` entries rather than relying on `depends_on` alone.
    - Treat JS-first examples with `command(...)`, `agent.review(...)`, and `StepHandle.output(...)` as authoring guidance that captures to manifest IR; do not execute arbitrary JavaScript.
-3. Run `node <package_root>/bin/dw.mjs validate <plan>` and fix structured validation errors before execution.
-4. Run `node <package_root>/bin/dw.mjs compile <plan>` and show a concise manifest/risk summary.
-5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `node <package_root>/bin/dw.mjs run <plan>`, then preserve the `DW_*` transcript markers.
+3. Run `<skill_dir>/scripts/dw validate <plan>` and fix structured validation errors before execution.
+4. Run `<skill_dir>/scripts/dw compile <plan>` and show a concise manifest/risk summary.
+5. For `dynamic-workflow <task>` or a natural-language run request, continue in one user operation through `<skill_dir>/scripts/dw run <plan>`, then preserve the `DW_*` transcript markers.
 6. Run `status`, `review`, and `summarize` for the resulting run id. Use `resume` when continuing an existing run.
-7. If the package root cannot be resolved from the skill install, try `<skill_dir>/scripts/dw`; if that also cannot find the runtime, report the missing runtime path instead of reading `src/` to infer behavior.
+7. If `<skill_dir>/scripts/dw` cannot find the bundled runtime, report the missing runtime path instead of reading `src/` to infer behavior.
 
 ## Safety Rules
 

@@ -11,7 +11,7 @@
     "dw": "./bin/dw.mjs"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/package-skill-runtime.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/tests/**/*.test.js",
     "lint": "node scripts/lint.mjs",
