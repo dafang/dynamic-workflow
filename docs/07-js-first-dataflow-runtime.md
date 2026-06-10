@@ -215,7 +215,7 @@ Prompt text cannot grant extra permissions.
 
 ## 8. Branches, Loops, And Tournaments
 
-JS authoring should eventually make complex patterns natural. Current implemented JS capture is limited to declarative step calls and context refs; the following branch/loop/tournament JS examples are future design examples, while typed YAML/JSON control steps are executable today.
+JS authoring should eventually make complex patterns natural. Current implemented JS capture is limited to declarative step calls and context refs; the following branch/loop/tournament JS examples are future design examples, while typed YAML/JSON control steps are executable today. YAML `workflow.loop` already supports body subgraphs, `$previous` feedback, and `until` short-circuiting; the JS helper shown below is the planned authoring shorthand for that executable IR.
 
 ```js
 const label = agent.classify("classify", {
@@ -312,9 +312,14 @@ If `workflow.js` changes, create a new run unless the user explicitly requests a
 - Validate structured outputs.
 - Enforce permission profiles.
 
+### Implemented: YAML Control Dataflow
+
+- `workflow.include`, `workflow.tournament`, and `workflow.loop` compile to concrete manifest nodes.
+- `workflow.loop` can expand a body subgraph per round, rewrite `$previous` to the prior terminal step, and skip later rounds with `input.until`.
+
 ### Deferred: Full JS Control Capture
 
-- Branches, loop callbacks, tournament helpers, and `when(...)` capture are not implemented yet.
+- Branch callbacks, loop callbacks, tournament helpers, and `when(...)` capture are not implemented yet.
 - YAML/JSON remains supported as typed IR import/export and as the direct CLI surface.
 
 ## 12. Compatibility

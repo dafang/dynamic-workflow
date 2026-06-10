@@ -26,6 +26,7 @@ It must stay in the tracked test fixture tree, not under local planning state su
 - Fan-Out Generate/Review/Filter/Synthesize
 - Agent Output Contract Dataflow
 - Conditional Include Feature/Bugfix
-- Loop + Tournament Chain
+- Loop Body + Previous Feedback + Until
+- Tournament Chain
 - Human Gate + Failure/Resume
 - JS-First Harness Capture

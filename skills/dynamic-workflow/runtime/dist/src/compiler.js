@@ -1,6 +1,7 @@
 import { validateOutputPath } from "./conditions.js";
 import { computeResourceLocks, writerConflicts } from "./resources.js";
 import { assertValidPlan } from "./validation.js";
+import { getStepDefinition } from "./registry.js";
 const DEFAULT_INCLUDE_LIBRARY = {
     "builtin.feature": [
         {
@@ -54,7 +55,7 @@ export function compilePlan(input, options = {}) {
             input: step.input ?? {},
             depends_on: dependencies[step.step_id] ?? [],
             reverse_dependencies: reverseDependencies[step.step_id] ?? [],
-            permission_profile: step.permission_profile ?? "executor_writer",
+            permission_profile: step.permission_profile ?? getStepDefinition(step.type).defaultPermissionProfile,
             backend: "current",
             resource_locks: locksByStep.get(step.step_id) ?? []
         };
@@ -238,6 +239,10 @@ function expandLoop(step) {
         stopCondition.trim() === "") {
         throw new Error(`Invalid workflow.loop ${step.step_id}; max_rounds and stop_condition are required.`);
     }
+    const body = Array.isArray(step.input?.body) ? readLoopBody(step.input.body, step.step_id) : undefined;
+    if (body && body.length > 0) {
+        return expandLoopBody(step, body, maxRounds, stopCondition);
+    }
     const rounds = [];
     let previousRoundLast;
     for (let round = 1; round <= maxRounds; round += 1) {
@@ -260,6 +265,177 @@ function expandLoop(step) {
         previousRoundLast = roundStepId;
     }
     return rounds;
+}
+function readLoopBody(body, loopStepId) {
+    if (!Array.isArray(body)) {
+        return [];
+    }
+    return body.map((rawStep, index) => {
+        if (typeof rawStep !== "object" || rawStep === null || Array.isArray(rawStep)) {
+            throw new Error(`Invalid workflow.loop ${loopStepId}; body[${index}] must be a step object.`);
+        }
+        const candidate = rawStep;
+        if (typeof candidate.step_id !== "string" ||
+            typeof candidate.type !== "string" ||
+            !Array.isArray(candidate.depends_on)) {
+            throw new Error(`Invalid workflow.loop ${loopStepId}; body[${index}] requires step_id, type, and depends_on.`);
+        }
+        return structuredClone(candidate);
+    });
+}
+function expandLoopBody(step, body, maxRounds, stopCondition) {
+    const rounds = [];
+    const bodyIds = new Set(body.map((bodyStep) => bodyStep.step_id));
+    if (bodyIds.size !== body.length) {
+        throw new Error(`Invalid workflow.loop ${step.step_id}; body step ids must be unique.`);
+    }
+    const dependedOn = new Set();
+    for (const bodyStep of body) {
+        for (const dependency of bodyStep.depends_on) {
+            if (bodyIds.has(dependency)) {
+                dependedOn.add(dependency);
+            }
+        }
+    }
+    const terminalBodySteps = body.filter((bodyStep) => !dependedOn.has(bodyStep.step_id));
+    if (terminalBodySteps.length === 0) {
+        throw new Error(`Invalid workflow.loop ${step.step_id}; body must have at least one terminal step.`);
+    }
+    if (terminalBodySteps.length > 1) {
+        throw new Error(`Invalid workflow.loop ${step.step_id}; body must have a single terminal step.`);
+    }
+    const terminalBodyStepId = terminalBodySteps[0]?.step_id;
+    if (!terminalBodyStepId) {
+        throw new Error(`Invalid workflow.loop ${step.step_id}; body terminal step could not be determined.`);
+    }
+    const until = readLoopUntil(step);
+    let previousTerminalStepId;
+    for (let round = 1; round <= maxRounds; round += 1) {
+        const previousRoundTerminal = previousTerminalStepId;
+        for (const bodyStep of body) {
+            const mappedId = loopBodyStepId(step.step_id, round, bodyStep.step_id);
+            const internalDependencies = bodyStep.depends_on.filter((dependency) => bodyIds.has(dependency));
+            const externalDependencies = bodyStep.depends_on.filter((dependency) => !bodyIds.has(dependency));
+            const dependsOn = uniqueStrings([
+                ...internalDependencies.map((dependency) => loopBodyStepId(step.step_id, round, dependency)),
+                ...externalDependencies,
+                ...(internalDependencies.length === 0 ? round === 1 ? step.depends_on : [previousRoundTerminal].filter(isString) : [])
+            ]);
+            const expanded = {
+                ...structuredClone(bodyStep),
+                step_id: mappedId,
+                depends_on: dependsOn,
+                input: {
+                    ...inheritedControlInput(step),
+                    ...(bodyStep.input ?? {}),
+                    control_origin: step.step_id,
+                    loop_round: round,
+                    stop_condition: stopCondition
+                }
+            };
+            const rewrittenConsumes = rewriteLoopBodyConsumes(bodyStep.consumes, step.step_id, round, bodyIds, previousRoundTerminal);
+            assignOptional(expanded, "consumes", rewrittenConsumes);
+            assignOptional(expanded, "run_if", loopBodyRunIf(step, bodyStep, round, bodyIds, until, previousRoundTerminal));
+            rounds.push(expanded);
+        }
+        previousTerminalStepId = loopBodyStepId(step.step_id, round, terminalBodyStepId);
+    }
+    return rounds;
+}
+function loopBodyStepId(loopStepId, round, bodyStepId) {
+    return `${loopStepId}__round_${round}__${bodyStepId}`;
+}
+function rewriteLoopBodyConsumes(consumes, loopStepId, round, bodyIds, previousRoundTerminal) {
+    if (!consumes)
+        return consumes;
+    return consumes.map((consume) => {
+        if (bodyIds.has(consume.from)) {
+            return { ...consume, from: loopBodyStepId(loopStepId, round, consume.from) };
+        }
+        if (consume.from === "$previous" || consume.from === "previous_round") {
+            if (!previousRoundTerminal) {
+                return undefined;
+            }
+            return { ...consume, from: previousRoundTerminal };
+        }
+        return { ...consume };
+    }).filter((consume) => consume !== undefined);
+}
+function loopBodyRunIf(loopStep, bodyStep, round, bodyIds, until, previousRoundTerminal) {
+    const bodyRunIf = rewriteLoopBodyRunCondition(bodyStep.run_if, loopStep.step_id, round, bodyIds, previousRoundTerminal);
+    if (loopStep.run_if && bodyRunIf) {
+        throw new Error(`Invalid workflow.loop ${loopStep.step_id}; run_if cannot be set on both the loop and body step ${bodyStep.step_id}.`);
+    }
+    const baseRunIf = loopStep.run_if ?? bodyRunIf;
+    if (round === 1 || !until || !previousRoundTerminal) {
+        return baseRunIf;
+    }
+    if (baseRunIf) {
+        throw new Error(`Invalid workflow.loop ${loopStep.step_id}; input.until cannot be combined with run_if on the loop or body entry step ${bodyStep.step_id}.`);
+    }
+    const continueCondition = {
+        step: previousRoundTerminal,
+        output_path: until.output_path,
+        op: negateConditionOp(until.op)
+    };
+    assignOptional(continueCondition, "value", until.value);
+    return baseRunIf ?? continueCondition;
+}
+function rewriteLoopBodyRunCondition(runIf, loopStepId, round, bodyIds, previousRoundTerminal) {
+    if (!runIf)
+        return undefined;
+    if (bodyIds.has(runIf.step)) {
+        return { ...runIf, step: loopBodyStepId(loopStepId, round, runIf.step) };
+    }
+    if (runIf.step === "$previous" || runIf.step === "previous_round") {
+        if (!previousRoundTerminal) {
+            return undefined;
+        }
+        return { ...runIf, step: previousRoundTerminal };
+    }
+    return { ...runIf };
+}
+function readLoopUntil(step) {
+    const until = step.input?.until;
+    if (typeof until !== "object" || until === null || Array.isArray(until)) {
+        return undefined;
+    }
+    const candidate = until;
+    const outputPath = typeof candidate.output_path === "string" ? candidate.output_path : undefined;
+    const op = typeof candidate.op === "string" ? candidate.op : undefined;
+    if (!outputPath || !op) {
+        return undefined;
+    }
+    if (!isNegatableConditionOp(op)) {
+        throw new Error(`Invalid workflow.loop ${step.step_id}; input.until op ${op} cannot be safely negated.`);
+    }
+    const condition = {
+        step: "",
+        output_path: outputPath,
+        op: op
+    };
+    assignOptional(condition, "value", candidate.value);
+    return condition;
+}
+function negateConditionOp(op) {
+    switch (op) {
+        case "==":
+            return "!=";
+        case "!=":
+            return "==";
+        case "exists":
+            return "not_exists";
+        case "not_exists":
+            return "exists";
+        default:
+            throw new Error(`Cannot negate condition operator ${op}.`);
+    }
+}
+function isNegatableConditionOp(op) {
+    return op === "==" || op === "!=" || op === "exists" || op === "not_exists";
+}
+function isString(value) {
+    return typeof value === "string";
 }
 function expandTournament(step) {
     const candidates = step.input?.candidate_steps;

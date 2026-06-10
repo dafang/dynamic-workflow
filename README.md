@@ -389,7 +389,8 @@ Compare candidate steps with pairwise judges:
 
 ### Bounded Loop
 
-Express iterative repair as bounded rounds:
+Express iterative repair as bounded rounds. A minimal loop expands to fixed
+`agent.execute` rounds:
 
 ```yaml
 - step_id: repair_loop
@@ -398,6 +399,51 @@ Express iterative repair as bounded rounds:
   input:
     max_rounds: 2
     stop_condition: tests_pass
+```
+
+For real repair loops, provide a body with execute, evidence collection, and
+review. Later rounds can consume `$previous`, and `until` skips remaining rounds
+when the prior terminal output satisfies the condition:
+
+```yaml
+- step_id: repair_loop
+  type: workflow.loop
+  depends_on: [collect_context]
+  input:
+    max_rounds: 3
+    stop_condition: no_blockers
+    until:
+      output_path: blocking_count
+      op: ==
+      value: 0
+    body:
+      - step_id: execute
+        type: agent.execute
+        depends_on: []
+        consumes:
+          - from: collect_context
+            select: $.output.collection.checks[*].stdout
+            as: context
+          - from: $previous
+            select: $.output.findings
+            as: previous_findings
+            required: false
+      - step_id: collect_tests
+        type: command.collect
+        depends_on: [execute]
+        collect:
+          commands:
+            - id: tests
+              run: npm test
+              allow_exit_codes: [0, 1]
+              soft_fail: true
+      - step_id: review
+        type: agent.review
+        depends_on: [collect_tests]
+        consumes:
+          - from: collect_tests
+            select: $.output.collection.checks
+            as: verification
 ```
 
 ### Control Dependencies
@@ -415,7 +461,7 @@ Plan authors may depend on original control ids:
     value: succeeded
 ```
 
-The compiler rewrites `repair_loop` to its terminal expanded node, such as `repair_loop__round_2`. The same applies to `workflow.include` and `workflow.tournament`. Compiled manifests fail closed if any `depends_on` or `run_if.step` references a missing node.
+The compiler rewrites `repair_loop` to its terminal expanded node, such as `repair_loop__round_2` for a minimal loop or `repair_loop__round_3__review` for a body loop. The same applies to `workflow.include` and `workflow.tournament`. Compiled manifests fail closed if any `depends_on` or `run_if.step` references a missing node.
 
 ## JS Harness
 
@@ -473,7 +519,7 @@ The current MVP has been exercised across:
 - Adversarial review.
 - `workflow.include` with `run_if` skip.
 - `workflow.tournament` pairwise expansion.
-- `workflow.loop` bounded rounds.
+- `workflow.loop` bounded rounds, loop bodies, previous-round feedback, and `until` short-circuiting.
 - Control dependency rewriting for `depends_on` and `run_if.step`.
 - `command.collect` with partial evidence and collection gaps.
 - `command.verify` with canonical strict `verify.commands`.

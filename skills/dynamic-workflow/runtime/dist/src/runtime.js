@@ -34,6 +34,7 @@ export async function runWorkflow(planInput, options = {}) {
             if (node.run_if && !(await evaluateRunIf(node.run_if, record))) {
                 state.state = "skipped";
                 state.summary = `Skipped because run_if was false: ${node.run_if.step}.${node.run_if.output_path}`;
+                state.output_path = await writeSkippedStepArtifact(artifactStore, stepId, state.summary, node.run_if, record);
                 await appendTrace(tracePath, {
                     event: "step_skipped",
                     run_id: runId,
@@ -118,6 +119,32 @@ export async function runWorkflow(planInput, options = {}) {
     }
     await appendTrace(tracePath, { event: "workflow_audited", run_id: runId, data: { ok: audit.ok, findings: audit.findings } });
     return { record, manifest, audit, markers };
+}
+async function writeSkippedStepArtifact(artifactStore, stepId, summary, condition, record) {
+    const sourceArtifact = await readRunIfSourceArtifact(condition, record);
+    const sourceOutput = recordValue(sourceArtifact?.output);
+    const output = {
+        ...(sourceOutput ?? {}),
+        status: "skipped",
+        step_id: stepId,
+        summary,
+        skipped: true,
+        skip_reason: summary,
+        forwarded_from_step: condition.step
+    };
+    return writeStepArtifact(artifactStore, stepId, {
+        step_id: stepId,
+        status: "skipped",
+        summary,
+        output,
+        verify: { ok: true, checks: [] }
+    });
+}
+async function readRunIfSourceArtifact(condition, record) {
+    const dependency = record.steps[condition.step];
+    if (!dependency?.output_path)
+        return undefined;
+    return readJson(dependency.output_path).catch(() => undefined);
 }
 async function enforceAgentOutputContract(node, result, trace) {
     if (!isAgentStepType(node.type) || result.status !== "succeeded") {

@@ -290,7 +290,70 @@ Compile behavior:
 - Expands to `agent.execute` nodes named `<step_id>__round_1`, `<step_id>__round_2`, and so on.
 - Each round depends on the previous round; round 1 depends on the control step's `depends_on`.
 - `max_rounds` must be a positive integer and cannot exceed 20.
-- `stop_condition` is recorded in each round input. The current MVP compiles bounded rounds; it does not dynamically terminate early based on the condition.
+- `stop_condition` is recorded in each round input.
+
+For real iterative repair workflows, provide `input.body`. The body is a small
+subgraph expanded once per round:
+
+```yaml
+- step_id: repair_loop
+  type: workflow.loop
+  depends_on: [collect_context]
+  input:
+    max_rounds: 3
+    stop_condition: no_blockers
+    until:
+      output_path: blocking_count
+      op: ==
+      value: 0
+    body:
+      - step_id: execute
+        type: agent.execute
+        depends_on: []
+        consumes:
+          - from: collect_context
+            select: $.output.collection.checks[*].stdout
+            as: context
+          - from: $previous
+            select: $.output.findings
+            as: previous_findings
+            required: false
+      - step_id: collect_tests
+        type: command.collect
+        depends_on: [execute]
+        collect:
+          commands:
+            - id: tests
+              run: npm test
+              allow_exit_codes: [0, 1]
+              soft_fail: true
+      - step_id: review
+        type: agent.review
+        depends_on: [collect_tests]
+        consumes:
+          - from: collect_tests
+            select: $.output.collection.checks
+            as: verification
+```
+
+Body expansion behavior:
+
+- Expanded ids use `<loop_id>__round_<n>__<body_step_id>`.
+- Body steps with no internal body dependencies depend on the loop control
+  dependencies in round 1, then the previous round terminal step in later
+  rounds.
+- Body `depends_on` references to other body steps are rewritten within the
+  same round.
+- `consumes.from: $previous` or `previous_round` rewrites to the previous
+  round terminal step. In round 1 it is omitted, so use it for optional repair
+  feedback.
+- `input.until` applies to round 2 and later by compiling a negated `run_if`
+  against the previous round terminal step. If the condition is met, later
+  rounds are skipped. `until.op` must be one of `==`, `!=`, `exists`, or
+  `not_exists` so the compiler can safely invert it into a continue condition.
+- Skipped round steps write forwarding artifacts from the condition source, so
+  downstream steps that depend on the loop control can still consume the
+  terminal loop output.
 
 ### `workflow.tournament`
 
@@ -339,7 +402,9 @@ Permission profiles are validated against step type allowlists. Prompt text cann
 - Compiled manifests use `dynamic_workflow/compiled/v2`; existing `dynamic_workflow/run/v1` plans without dataflow fields remain valid.
 - If `consumes` is absent, runtime behavior matches the old scheduling-only MVP.
 - Control steps compile before runtime; runtime executes concrete nodes.
-- `workflow.loop` is bounded and does not short-circuit early yet.
+- `workflow.loop` is bounded. Body loops can short-circuit later rounds via
+  `input.until`; legacy loops without `body` still expand to fixed
+  `agent.execute` rounds.
 - `human.approval` enters `waiting_user`; a full approve/reject/revise resume workflow is still host-dependent.
 - `command.verify` and `command.collect` commands run through `sh -c` and capture capped stdout/stderr in artifacts.
 - Step outputs are sanitized before being written to user-facing artifacts; secret, token, password, raw prompt, internal prompt, and debug keys are removed recursively.

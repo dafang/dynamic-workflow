@@ -265,6 +265,140 @@ test("expands workflow loops into bounded round steps with stop condition", () =
   assert.deepEqual(manifest.dependencies.repair_loop__round_2, ["repair_loop__round_1"]);
 });
 
+test("expands workflow loop body into per-round subgraphs with previous round dataflow", () => {
+  const manifest = compilePlan(
+    plan([
+      {
+        step_id: "repair_loop",
+        type: "workflow.loop",
+        depends_on: ["collect_context"],
+        input: {
+          max_rounds: 3,
+          stop_condition: "tests_pass",
+          until: { output_path: "blocking_count", op: "==", value: 0 },
+          body: [
+            {
+              step_id: "execute",
+              type: "agent.execute",
+              depends_on: [],
+              input: { prompt: "Repair the module." },
+              consumes: [
+                { from: "collect_context", select: "$.output.collection.checks", as: "context" },
+                { from: "$previous", select: "$.output.findings", as: "previous_findings", required: false }
+              ]
+            },
+            {
+              step_id: "collect_tests",
+              type: "command.collect",
+              depends_on: ["execute"],
+              collect: { commands: [{ id: "tests", run: "npm test", allow_exit_codes: [0, 1], soft_fail: true }] }
+            },
+            {
+              step_id: "review",
+              type: "agent.review",
+              depends_on: ["collect_tests"],
+              consumes: [{ from: "collect_tests", select: "$.output.collection.checks", as: "verification" }]
+            }
+          ]
+        }
+      },
+      {
+        step_id: "summarize",
+        type: "agent.synthesize",
+        depends_on: ["repair_loop"],
+        consumes: [{ from: "repair_loop", select: "$.output.blocking_count", as: "blocking_count" }]
+      },
+      {
+        step_id: "collect_context",
+        type: "command.collect",
+        depends_on: [],
+        collect: { commands: [{ id: "ctx", run: "echo ctx" }] }
+      }
+    ])
+  );
+
+  assert.deepEqual(
+    manifest.nodes.map((node) => node.step_id),
+    [
+      "repair_loop__round_1__execute",
+      "repair_loop__round_1__collect_tests",
+      "repair_loop__round_1__review",
+      "repair_loop__round_2__execute",
+      "repair_loop__round_2__collect_tests",
+      "repair_loop__round_2__review",
+      "repair_loop__round_3__execute",
+      "repair_loop__round_3__collect_tests",
+      "repair_loop__round_3__review",
+      "summarize",
+      "collect_context"
+    ]
+  );
+  assert.deepEqual(manifest.dependencies.repair_loop__round_1__execute, ["collect_context"]);
+  assert.deepEqual(manifest.dependencies.repair_loop__round_2__execute, ["repair_loop__round_1__review"]);
+  assert.deepEqual(manifest.dependencies.summarize, ["repair_loop__round_3__review"]);
+  assert.deepEqual(manifest.nodes.find((node) => node.step_id === "repair_loop__round_2__execute")?.consumes, [
+    { from: "collect_context", select: "$.output.collection.checks", as: "context" },
+    { from: "repair_loop__round_1__review", select: "$.output.findings", as: "previous_findings", required: false }
+  ]);
+  assert.deepEqual(manifest.nodes.find((node) => node.step_id === "repair_loop__round_2__execute")?.run_if, {
+    step: "repair_loop__round_1__review",
+    output_path: "blocking_count",
+    op: "!=",
+    value: 0
+  });
+  assert.equal(
+    manifest.nodes.find((node) => node.step_id === "repair_loop__round_1__collect_tests")?.permission_profile,
+    "command_collector"
+  );
+  assert.equal(
+    manifest.nodes.find((node) => node.step_id === "repair_loop__round_1__review")?.permission_profile,
+    "reviewer_readonly"
+  );
+});
+
+test("rewrites workflow loop body run_if references within each round", () => {
+  const manifest = compilePlan(
+    plan([
+      {
+        step_id: "repair_loop",
+        type: "workflow.loop",
+        depends_on: [],
+        input: {
+          max_rounds: 2,
+          stop_condition: "tests_pass",
+          body: [
+            {
+              step_id: "collect_tests",
+              type: "command.collect",
+              depends_on: [],
+              collect: { commands: [{ id: "tests", run: "node --version", allow_exit_codes: [0, 1], soft_fail: true }] }
+            },
+            {
+              step_id: "review",
+              type: "agent.review",
+              depends_on: ["collect_tests"],
+              run_if: { step: "collect_tests", output_path: "collection.ok", op: "==", value: true }
+            }
+          ]
+        }
+      }
+    ])
+  );
+
+  assert.deepEqual(manifest.nodes.find((node) => node.step_id === "repair_loop__round_1__review")?.run_if, {
+    step: "repair_loop__round_1__collect_tests",
+    output_path: "collection.ok",
+    op: "==",
+    value: true
+  });
+  assert.deepEqual(manifest.nodes.find((node) => node.step_id === "repair_loop__round_2__review")?.run_if, {
+    step: "repair_loop__round_2__collect_tests",
+    output_path: "collection.ok",
+    op: "==",
+    value: true
+  });
+});
+
 test("expands workflow tournaments into deterministic pairwise judges", () => {
   const manifest = compilePlan(
     plan([

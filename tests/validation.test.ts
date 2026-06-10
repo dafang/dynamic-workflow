@@ -343,6 +343,161 @@ test("rejects invalid workflow loops", () => {
   );
 });
 
+test("validates workflow loop body dataflow and previous-round feedback", () => {
+  const result = validatePlan(
+    validPlan({
+      steps: [
+        {
+          step_id: "collect_context",
+          type: "command.collect",
+          depends_on: [],
+          collect: { commands: ["node --version"] }
+        },
+        {
+          step_id: "repair_loop",
+          type: "workflow.loop",
+          depends_on: ["collect_context"],
+          input: {
+            max_rounds: 3,
+            stop_condition: "no_blockers",
+            until: { output_path: "blocking_count", op: "==", value: 0 },
+            body: [
+              {
+                step_id: "execute",
+                type: "agent.execute",
+                depends_on: [],
+                consumes: [
+                  { from: "collect_context", select: "$.output.collection.checks[*].stdout", as: "context" },
+                  { from: "$previous", select: "$.output.findings", as: "previous_findings", required: false }
+                ]
+              },
+              {
+                step_id: "collect_tests",
+                type: "command.collect",
+                depends_on: ["execute"],
+                collect: { commands: [{ id: "tests", run: "node --version", allow_exit_codes: [0, 1], soft_fail: true }] }
+              },
+              {
+                step_id: "review",
+                type: "agent.review",
+                depends_on: ["collect_tests"],
+                consumes: [{ from: "collect_tests", select: "$.output.collection.checks", as: "verification" }]
+              }
+            ]
+          }
+        }
+      ]
+    })
+  );
+  assert.equal(result.ok, true);
+});
+
+test("rejects invalid workflow loop body declarations", () => {
+  expectError(
+    validPlan({
+      steps: [
+        {
+          step_id: "loop",
+          type: "workflow.loop",
+          depends_on: [],
+          input: {
+            max_rounds: 2,
+            stop_condition: "done",
+            body: [
+              { step_id: "a", type: "agent.execute", depends_on: [] },
+              { step_id: "b", type: "agent.review", depends_on: [] }
+            ]
+          }
+        }
+      ]
+    }),
+    "invalid_loop_body"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        {
+          step_id: "loop",
+          type: "workflow.loop",
+          depends_on: [],
+          input: {
+            max_rounds: 2,
+            stop_condition: "done",
+            until: { output_path: "blocking_count", op: ">", value: 0 },
+            body: [{ step_id: "review", type: "agent.review", depends_on: [] }]
+          }
+        }
+      ]
+    }),
+    "invalid_loop_until"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        {
+          step_id: "loop",
+          type: "workflow.loop",
+          depends_on: [],
+          input: {
+            max_rounds: 2,
+            stop_condition: "done",
+            body: [{ step_id: "review", type: "agent.review", depends_on: ["missing"] }]
+          }
+        }
+      ]
+    }),
+    "unknown_loop_body_dependency"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        {
+          step_id: "loop",
+          type: "workflow.loop",
+          depends_on: [],
+          input: {
+            max_rounds: 2,
+            stop_condition: "done",
+            body: [
+              {
+                step_id: "review",
+                type: "agent.review",
+                depends_on: [],
+                consumes: [{ from: "missing", select: "$.output.status", as: "missing_context" }]
+              }
+            ]
+          }
+        }
+      ]
+    }),
+    "unknown_loop_body_consume_step"
+  );
+  expectError(
+    validPlan({
+      steps: [
+        {
+          step_id: "loop",
+          type: "workflow.loop",
+          depends_on: [],
+          input: {
+            max_rounds: 2,
+            stop_condition: "done",
+            body: [
+              {
+                step_id: "review",
+                type: "agent.review",
+                depends_on: [],
+                run_if: { step: "missing", output_path: "ok", op: "==", value: true }
+              }
+            ]
+          }
+        }
+      ]
+    }),
+    "unknown_loop_body_run_if_step"
+  );
+});
+
 test("rejects budgets exceeding host maximums", () => {
   expectError(validPlan({ budget: { max_steps: 9999 } }), "budget_exceeds_host_limit");
   expectError(

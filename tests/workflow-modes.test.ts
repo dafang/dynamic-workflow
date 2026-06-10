@@ -93,7 +93,8 @@ test("workflow mode matrix names every registered mode and validation surface", 
     "Sequential Dataflow Module Review",
     "Fan-Out Generate/Review/Filter/Synthesize",
     "Conditional Include Feature/Bugfix",
-    "Loop + Tournament Chain",
+    "Loop Body + Previous Feedback + Until",
+    "Tournament Chain",
     "Human Gate + Failure/Resume",
     "JS-First Harness Capture"
   ]) {
@@ -193,14 +194,43 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
       step_id: "repair_loop",
       type: "workflow.loop",
       depends_on: ["design_tournament"],
-      input: { max_rounds: 3, stop_condition: "module_verified" }
+      input: {
+        max_rounds: 3,
+        stop_condition: "module_verified",
+        until: { output_path: "blocking_count", op: "==", value: 0 },
+        body: [
+          {
+            step_id: "execute",
+            type: "agent.execute",
+            depends_on: [],
+            input: { output: { artifacts: [{ path: "src/math.ts", kind: "file", status: "checked" }] } },
+            consumes: [
+              { from: "design_tournament", select: "$.output.winner", as: "winner" },
+              { from: "$previous", select: "$.output.findings", as: "previous_findings", required: false }
+            ]
+          },
+          {
+            step_id: "collect_tests",
+            type: "command.collect",
+            depends_on: ["execute"],
+            collect: { commands: [{ id: "module_probe", run: verifierCommand, allow_exit_codes: [0, 1], soft_fail: true }] }
+          },
+          {
+            step_id: "review",
+            type: "agent.review",
+            depends_on: ["collect_tests"],
+            input: { output: { ok: true, findings: [], blocking_count: 0 } },
+            consumes: [{ from: "collect_tests", select: "$.output.collection.checks", as: "verification" }]
+          }
+        ]
+      }
     },
     {
       step_id: "final_synthesis",
       type: "agent.synthesize",
       depends_on: ["repair_loop", "control_consumer"],
       consumes: [
-        { from: "repair_loop", select: "$.output.artifacts", as: "repair_artifacts" },
+        { from: "repair_loop", select: "$.output.blocking_count", as: "repair_blocking_count" },
         { from: "control_consumer", select: "$.output.summary", as: "included_summary" },
         { from: "design_tournament", select: "$.output.winner", as: "tournament_winner" },
         { from: "filter_candidates", select: "$.output.accepted", as: "accepted_candidates" },
@@ -223,7 +253,7 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
     value: "feature"
   });
   assert.deepEqual(compiled.nodes.find((node) => node.step_id === "final_synthesis")?.consumes, [
-    { from: "repair_loop__round_3", select: "$.output.artifacts", as: "repair_artifacts" },
+    { from: "repair_loop__round_3__review", select: "$.output.blocking_count", as: "repair_blocking_count" },
     { from: "control_consumer", select: "$.output.summary", as: "included_summary" },
     { from: "design_tournament__judge_2", select: "$.output.winner", as: "tournament_winner" },
     { from: "filter_candidates", select: "$.output.accepted", as: "accepted_candidates" },
@@ -239,11 +269,16 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
   assert.deepEqual(result.manifest.nodes.find((node) => node.step_id === "control_consumer")?.consumes, [
     { from: "feature_flow__review", select: "$.output.ok", as: "feature_review_ok" }
   ]);
-  assert.deepEqual(result.manifest.dependencies.repair_loop__round_1, ["design_tournament__judge_2"], "loop should depend on tournament terminal judge");
-  assert.deepEqual(result.manifest.dependencies.final_synthesis, ["control_consumer", "repair_loop__round_3"], "synthesis should depend on loop terminal round");
+  assert.deepEqual(result.manifest.dependencies.repair_loop__round_1__execute, ["design_tournament__judge_2"], "loop body entry should depend on tournament terminal judge");
+  assert.deepEqual(result.manifest.dependencies.repair_loop__round_2__execute, ["repair_loop__round_1__review"], "second loop round should depend on previous review");
+  assert.deepEqual(result.manifest.dependencies.final_synthesis, ["control_consumer", "repair_loop__round_3__review"], "synthesis should depend on loop terminal review");
   assert.equal(result.record.steps.design_tournament__judge_1?.state, "succeeded", "first tournament judge should run");
   assert.equal(result.record.steps.design_tournament__judge_2?.state, "succeeded", "terminal tournament judge should run");
-  assert.equal(result.record.steps.repair_loop__round_3?.state, "succeeded", "third loop round should run");
+  assert.equal(result.record.steps.repair_loop__round_1__execute?.state, "succeeded", "first loop execute should run");
+  assert.equal(result.record.steps.repair_loop__round_1__collect_tests?.state, "succeeded", "first loop collection should run");
+  assert.equal(result.record.steps.repair_loop__round_1__review?.state, "succeeded", "first loop review should run");
+  assert.equal(result.record.steps.repair_loop__round_2__execute?.state, "skipped", "until should skip second loop execute");
+  assert.equal(result.record.steps.repair_loop__round_3__review?.state, "skipped", "until should skip terminal third review");
   const classifyArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "classify.json"));
   assert.equal(classifyArtifact.output?.["label"], "feature", "classify should expose label");
   assert.equal(classifyArtifact.output?.["confidence"], 1, "classify should expose confidence");
@@ -261,13 +296,13 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
   assert.equal(judgeArtifact.output?.["winner"], "design_tournament__judge_1", "tournament judge should expose winner");
   assert.equal(judgeArtifact.output?.["loser"], "candidate_c", "tournament judge should expose loser");
   assert.match(String(judgeArtifact.output?.["rationale"]), /selected/, "tournament judge should expose rationale");
-  const repairArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "repair_loop__round_3.json"));
-  assert.deepEqual(repairArtifact.output?.["artifacts"], [], "execute loop should expose artifacts");
+  const repairArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "repair_loop__round_3__review.json"));
+  assert.equal(repairArtifact.output?.["blocking_count"], 0, "skipped loop terminal should forward blocking count");
   const finalArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "final_synthesis.json"));
   assert.match(String(finalArtifact.output?.["summary"]), /Executed final_synthesis/, "synthesize should expose summary");
   assert.deepEqual(finalArtifact.output?.["decisions"], [], "synthesize should expose decisions");
   assert.deepEqual(finalArtifact.output?.["next_actions"], [], "synthesize should expose next_actions");
-  assert.match(JSON.stringify(finalArtifact.output), /repair_artifacts/, "final synthesis should consume loop terminal artifacts");
+  assert.match(JSON.stringify(finalArtifact.output), /repair_blocking_count/, "final synthesis should consume loop terminal review output");
   assert.match(JSON.stringify(finalArtifact.output), /tournament_winner/, "final synthesis should consume tournament winner");
   assert.match(JSON.stringify(finalArtifact.output), /accepted_candidates/, "final synthesis should consume filter output");
 });

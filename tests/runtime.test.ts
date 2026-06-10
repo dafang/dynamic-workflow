@@ -615,6 +615,64 @@ test("workflow.tournament and workflow.loop controls can be chained as dependenc
   assert.equal(result.record.steps.verify_commands?.state, "succeeded");
 });
 
+test("workflow.loop body can collect, review, and skip later rounds when until is met", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "repair_loop",
+        type: "workflow.loop",
+        depends_on: [],
+        input: {
+          max_rounds: 3,
+          stop_condition: "no_blockers",
+          until: { output_path: "blocking_count", op: "==", value: 0 },
+          body: [
+            {
+              step_id: "execute",
+              type: "agent.execute",
+              depends_on: [],
+              input: { output: { artifacts: [{ path: "round.txt", kind: "file", status: "checked" }] } },
+              consumes: [{ from: "$previous", select: "$.output.findings", as: "previous_findings", required: false }]
+            },
+            {
+              step_id: "collect_tests",
+              type: "command.collect",
+              depends_on: ["execute"],
+              collect: { commands: [{ id: "tests", run: "node --version" }] }
+            },
+            {
+              step_id: "review",
+              type: "agent.review",
+              depends_on: ["collect_tests"],
+              input: { output: { ok: true, findings: [], blocking_count: 0 } },
+              consumes: [{ from: "collect_tests", select: "$.output.collection.checks", as: "verification" }]
+            }
+          ]
+        }
+      },
+      {
+        step_id: "synthesize",
+        type: "agent.synthesize",
+        depends_on: ["repair_loop"],
+        consumes: [{ from: "repair_loop", select: "$.output.blocking_count", as: "blocking_count" }]
+      }
+    ]),
+    { rootDir, runId: "run_loop_body_until" }
+  );
+  assert.equal(result.record.state, "completed");
+  assert.equal(result.audit.ok, true);
+  assert.equal(result.record.steps.repair_loop__round_1__execute?.state, "succeeded");
+  assert.equal(result.record.steps.repair_loop__round_1__collect_tests?.state, "succeeded");
+  assert.equal(result.record.steps.repair_loop__round_1__review?.state, "succeeded");
+  assert.equal(result.record.steps.repair_loop__round_2__execute?.state, "skipped");
+  assert.equal(result.record.steps.repair_loop__round_2__collect_tests?.state, "skipped");
+  assert.equal(result.record.steps.repair_loop__round_2__review?.state, "skipped");
+  assert.equal(result.record.steps.repair_loop__round_3__execute?.state, "skipped");
+  assert.equal(result.record.steps.synthesize?.state, "succeeded");
+  assert.deepEqual(result.manifest.dependencies.synthesize, ["repair_loop__round_3__review"]);
+});
+
 test("failed steps block downstream dependents and write failure trace", async () => {
   const rootDir = await tempRoot();
   const result = await runWorkflow(

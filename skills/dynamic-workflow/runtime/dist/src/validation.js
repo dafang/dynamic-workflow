@@ -1,7 +1,9 @@
 import { isPermissionProfileName } from "./permissions.js";
 import { getStepDefinition, isStepType } from "./registry.js";
+import { validateOutputPath } from "./conditions.js";
 import { HOST_LIMITS, SUPPORTED_BACKEND, SUPPORTED_SCHEMA_VERSION } from "./schema.js";
 const CONDITION_OPS = new Set(["==", "!=", ">", ">=", "<", "<=", "exists", "not_exists"]);
+const LOOP_UNTIL_OPS = new Set(["==", "!=", "exists", "not_exists"]);
 const DATAFLOW_ALIAS = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PRODUCE_NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
 const SELECTOR_SEGMENT = "(?:[A-Za-z_][A-Za-z0-9_]*|\\*)";
@@ -86,13 +88,7 @@ export function validatePlan(input) {
         const produces = readProduces(rawStep.produces, `${path}.produces`, stepId, errors);
         if (rawType === "workflow.loop") {
             const loopInput = inputObject ?? {};
-            if (!Number.isInteger(loopInput.max_rounds) || !("stop_condition" in loopInput)) {
-                errors.push(withStepId({
-                    code: "invalid_loop",
-                    message: "workflow.loop requires input.max_rounds and input.stop_condition.",
-                    path: `${path}.input`
-                }, stepId));
-            }
+            validateLoopInput(loopInput, rawStep, path, stepId, errors);
         }
         if (rawType === "command.verify" || rawType === "command.collect") {
             validateCommandStepCommands(rawStep, path, stepId, rawType, errors);
@@ -136,6 +132,202 @@ export function validatePlan(input) {
         plan,
         errors: []
     };
+}
+function validateLoopInput(loopInput, rawStep, path, stepId, errors) {
+    if (!Number.isInteger(loopInput.max_rounds) ||
+        typeof loopInput.stop_condition !== "string" ||
+        loopInput.stop_condition.trim() === "") {
+        errors.push(withStepId({
+            code: "invalid_loop",
+            message: "workflow.loop requires input.max_rounds and input.stop_condition.",
+            path: `${path}.input`
+        }, stepId));
+    }
+    if (typeof loopInput.max_rounds === "number" && loopInput.max_rounds > HOST_LIMITS.step_max_rounds) {
+        errors.push(withStepId({
+            code: "budget_exceeds_host_limit",
+            message: `${path}.input.max_rounds=${loopInput.max_rounds} exceeds host maximum ${HOST_LIMITS.step_max_rounds}.`,
+            path: `${path}.input.max_rounds`
+        }, stepId));
+    }
+    const body = loopInput.body;
+    if (body !== undefined) {
+        validateLoopBody(body, rawStep, path, stepId, errors);
+    }
+    if (loopInput.until !== undefined) {
+        validateLoopUntil(loopInput.until, rawStep, path, stepId, errors);
+    }
+}
+function validateLoopUntil(value, rawStep, path, stepId, errors) {
+    if (!isRecord(value)) {
+        errors.push(withStepId({ code: "invalid_loop_until", message: "workflow.loop input.until must be an object.", path: `${path}.input.until` }, stepId));
+        return;
+    }
+    const outputPath = typeof value.output_path === "string" ? value.output_path : "";
+    const op = typeof value.op === "string" ? value.op : "";
+    if (!validateOutputPath(outputPath)) {
+        errors.push(withStepId({
+            code: "invalid_loop_until",
+            message: "workflow.loop input.until requires a valid output_path.",
+            path: `${path}.input.until.output_path`
+        }, stepId));
+    }
+    if (!LOOP_UNTIL_OPS.has(op)) {
+        errors.push(withStepId({
+            code: "invalid_loop_until",
+            message: `workflow.loop input.until op ${op} must be one of ${[...LOOP_UNTIL_OPS].join(", ")}.`,
+            path: `${path}.input.until.op`
+        }, stepId));
+    }
+    if (rawStep.run_if !== undefined) {
+        errors.push(withStepId({
+            code: "invalid_loop_until",
+            message: "workflow.loop input.until cannot be combined with run_if on the loop step.",
+            path: `${path}.run_if`
+        }, stepId));
+    }
+}
+function validateLoopBody(value, rawStep, path, stepId, errors) {
+    if (!Array.isArray(value) || value.length === 0) {
+        errors.push(withStepId({ code: "invalid_loop_body", message: "workflow.loop input.body must be a non-empty array.", path: `${path}.input.body` }, stepId));
+        return;
+    }
+    const bodyIds = new Set();
+    const bodySteps = [];
+    for (const [index, bodyStep] of value.entries()) {
+        const bodyPath = `${path}.input.body[${index}]`;
+        if (!isRecord(bodyStep)) {
+            errors.push(withStepId({ code: "invalid_loop_body", message: "Loop body step must be an object.", path: bodyPath }, stepId));
+            continue;
+        }
+        const bodyStepId = readString(bodyStep, "step_id", errors, bodyPath);
+        if (bodyIds.has(bodyStepId)) {
+            errors.push(withStepId({
+                code: "invalid_loop_body",
+                message: `Duplicate loop body step_id ${bodyStepId}.`,
+                path: `${bodyPath}.step_id`
+            }, stepId));
+        }
+        bodyIds.add(bodyStepId);
+        const bodyType = readString(bodyStep, "type", errors, bodyPath);
+        if (!isStepType(bodyType)) {
+            errors.push(withStepId({
+                code: "unsupported_step_type",
+                message: `Unsupported loop body step type ${bodyType}.`,
+                path: `${bodyPath}.type`
+            }, stepId));
+        }
+        else if (bodyType.startsWith("workflow.")) {
+            errors.push(withStepId({
+                code: "invalid_loop_body",
+                message: "workflow.loop body steps cannot be nested workflow control steps.",
+                path: `${bodyPath}.type`
+            }, stepId));
+        }
+        const dependsOn = readStringArray(bodyStep.depends_on ?? [], `${bodyPath}.depends_on`, errors);
+        readConsumes(bodyStep.consumes, `${bodyPath}.consumes`, stepId, errors);
+        readRunCondition(bodyStep.run_if, `${bodyPath}.run_if`, stepId, errors);
+        if (bodyStep.run_if !== undefined && isRecord(rawStep.input) && rawStep.input.until !== undefined) {
+            errors.push(withStepId({
+                code: "invalid_loop_until",
+                message: "workflow.loop input.until cannot be combined with run_if on loop body steps.",
+                path: `${bodyPath}.run_if`
+            }, stepId));
+        }
+        if (bodyType === "command.verify" || bodyType === "command.collect") {
+            validateCommandStepCommands(bodyStep, bodyPath, stepId, bodyType, errors);
+        }
+        bodySteps.push({ step_id: bodyStepId, depends_on: dependsOn, raw: bodyStep, path: bodyPath });
+    }
+    const topLevelDependsOn = new Set(readStringArray(rawStep.depends_on ?? [], `${path}.depends_on`, errors));
+    const dependedOn = new Set();
+    for (const bodyStep of bodySteps) {
+        for (const dependency of bodyStep.depends_on) {
+            if (bodyIds.has(dependency)) {
+                dependedOn.add(dependency);
+                continue;
+            }
+            if (!topLevelDependsOn.has(dependency)) {
+                errors.push(withStepId({
+                    code: "unknown_loop_body_dependency",
+                    message: `Loop body step ${bodyStep.step_id} depends on ${dependency}, which is neither a body step nor a loop dependency.`,
+                    path: `${bodyStep.path}.depends_on`
+                }, stepId));
+            }
+        }
+        if (Array.isArray(bodyStep.raw.consumes)) {
+            validateLoopBodyConsumes(bodyStep.raw.consumes, bodyStep.step_id, bodyIds, topLevelDependsOn, bodyStep.path, stepId, errors);
+        }
+        validateLoopBodyRunIf(bodyStep.raw.run_if, bodyStep.step_id, bodyIds, topLevelDependsOn, bodyStep.path, stepId, errors);
+    }
+    const terminalSteps = bodySteps.filter((bodyStep) => !dependedOn.has(bodyStep.step_id));
+    if (terminalSteps.length !== 1) {
+        errors.push(withStepId({
+            code: "invalid_loop_body",
+            message: `workflow.loop input.body must have exactly one terminal step; found ${terminalSteps.length}.`,
+            path: `${path}.input.body`
+        }, stepId));
+    }
+    validateLoopBodyCycles(bodySteps, stepId, errors);
+}
+function validateLoopBodyRunIf(value, bodyStepId, bodyIds, topLevelDependsOn, bodyPath, loopStepId, errors) {
+    if (!isRecord(value))
+        return;
+    const step = typeof value.step === "string" ? value.step : "";
+    if (step === "$previous" || step === "previous_round" || bodyIds.has(step) || topLevelDependsOn.has(step)) {
+        return;
+    }
+    errors.push(withStepId({
+        code: "unknown_loop_body_run_if_step",
+        message: `Loop body step ${bodyStepId} run_if references ${step}, which is not a body step, loop dependency, or $previous.`,
+        path: `${bodyPath}.run_if.step`
+    }, loopStepId));
+}
+function validateLoopBodyConsumes(consumes, bodyStepId, bodyIds, topLevelDependsOn, bodyPath, loopStepId, errors) {
+    for (const [index, consume] of consumes.entries()) {
+        if (!isRecord(consume))
+            continue;
+        const from = typeof consume.from === "string" ? consume.from : "";
+        if (from === "$previous" || from === "previous_round" || bodyIds.has(from) || topLevelDependsOn.has(from)) {
+            continue;
+        }
+        errors.push(withStepId({
+            code: "unknown_loop_body_consume_step",
+            message: `Loop body step ${bodyStepId} consumes from ${from}, which is not a body step, loop dependency, or $previous.`,
+            path: `${bodyPath}.consumes[${index}].from`
+        }, loopStepId));
+    }
+}
+function validateLoopBodyCycles(bodySteps, loopStepId, errors) {
+    const bodyIds = new Set(bodySteps.map((step) => step.step_id));
+    const byId = new Map(bodySteps.map((step) => [step.step_id, step]));
+    const visiting = new Set();
+    const visited = new Set();
+    function visit(stepId, path) {
+        if (visited.has(stepId))
+            return;
+        if (visiting.has(stepId)) {
+            errors.push(withStepId({
+                code: "dependency_cycle",
+                message: `Loop body dependency cycle detected: ${[...path, stepId].join(" -> ")}.`
+            }, loopStepId));
+            return;
+        }
+        const step = byId.get(stepId);
+        if (!step)
+            return;
+        visiting.add(stepId);
+        for (const dependency of step.depends_on) {
+            if (bodyIds.has(dependency)) {
+                visit(dependency, [...path, stepId]);
+            }
+        }
+        visiting.delete(stepId);
+        visited.add(stepId);
+    }
+    for (const bodyStep of bodySteps) {
+        visit(bodyStep.step_id, []);
+    }
 }
 export function assertValidPlan(input) {
     const result = validatePlan(input);
