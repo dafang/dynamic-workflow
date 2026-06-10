@@ -66,6 +66,7 @@ export async function runWorkflow(planInput: unknown, options: RunWorkflowOption
       state.attempts += 1;
       markers.push(`DW_STEP_START ${stepId}`);
       await appendTrace(tracePath, { event: "step_started", run_id: runId, step_id: stepId });
+      await store.saveRun(record);
 
       const result: BackendStepResult = await buildStepContext({
         runId,

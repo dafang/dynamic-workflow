@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { auditRun } from "../src/audit.js";
+import type { Backend, BackendStepResult } from "../src/backend.js";
 import { compilePlan } from "../src/compiler.js";
 import { runWorkflow } from "../src/runtime.js";
 import { initialStepStates } from "../src/scheduler.js";
@@ -46,6 +47,45 @@ test("runtime creates durable run tree, trace, step outputs, and completes audit
   assert.match(trace, /step_started/);
   assert.match(trace, /step_succeeded/);
   assert.match(trace, /workflow_completed/);
+});
+
+test("runtime persists running step state before awaiting a long backend", async () => {
+  const rootDir = await tempRoot();
+  let releaseBackend: (() => void) | undefined;
+  let resolveBackendStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    resolveBackendStarted = resolve;
+  });
+  const backend: Backend = {
+    name: "current",
+    async executeStep(): Promise<BackendStepResult> {
+      resolveBackendStarted?.();
+      await new Promise<void>((release) => {
+        releaseBackend = release;
+      });
+      return {
+        status: "succeeded",
+        summary: "backend completed",
+        output: { artifacts: [] }
+      };
+    }
+  };
+  const runPromise = runWorkflow(plan([{ step_id: "execute", type: "agent.execute", depends_on: [] }]), {
+    rootDir,
+    runId: "run_persist_running",
+    backend
+  });
+
+  await started;
+
+  const runRecord = JSON.parse(await readFile(path.join(rootDir, "runs", "run_persist_running", "run.json"), "utf8")) as {
+    steps: { execute: { state: string; attempts: number } };
+  };
+  assert.equal(runRecord.steps.execute.state, "running");
+  assert.equal(runRecord.steps.execute.attempts, 1);
+  releaseBackend?.();
+  const result = await runPromise;
+  assert.equal(result.record.state, "completed");
 });
 
 test("command.verify executes commands declared in verify.commands and emits command trace metadata", async () => {
