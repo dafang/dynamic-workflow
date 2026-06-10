@@ -68,3 +68,55 @@ test("lintPlan does not warn for bounded command.collect scans", () => {
   assert.equal(result.ok, true);
   assert.deepEqual(lintPlan(result.plan), []);
 });
+
+test("lintPlan warns when agent steps would use the current backend stub", () => {
+  const result = validatePlan(
+    plan([
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: []
+      },
+      {
+        step_id: "synthesize",
+        type: "agent.synthesize",
+        depends_on: ["review"],
+        input: { agent_backend: "paseo" }
+      },
+      {
+        step_id: "loop",
+        type: "workflow.loop",
+        depends_on: ["synthesize"],
+        input: {
+          max_rounds: 2,
+          stop_condition: "no_blockers",
+          body: [
+            {
+              step_id: "execute",
+              type: "agent.execute",
+              depends_on: [],
+              input: { agent_backend: "paseo" }
+            },
+            {
+              step_id: "review_body",
+              type: "agent.review",
+              depends_on: ["execute"]
+            }
+          ]
+        }
+      }
+    ])
+  );
+  assert.equal(result.ok, true);
+
+  const warnings = lintPlan(result.plan);
+  assert.deepEqual(
+    warnings.map((warning) => warning.code),
+    ["agent_current_stub", "agent_current_stub"]
+  );
+  assert.equal(warnings[0]?.step_id, "review");
+  assert.equal(warnings[0]?.path, "steps[0].input.agent_backend");
+  assert.match(warnings[0]?.message ?? "", /input\.agent_backend: paseo/);
+  assert.equal(warnings[1]?.step_id, "review_body");
+  assert.equal(warnings[1]?.path, "steps[2].input.body[1].input.agent_backend");
+});

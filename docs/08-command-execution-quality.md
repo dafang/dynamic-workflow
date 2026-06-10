@@ -278,6 +278,9 @@ Initial warnings:
 - `command.verify` with multiple search/listing probes that look optional;
   suggest `command.collect`.
 - Oversized command groups that mix evidence gathering and final verification.
+- `agent.*` steps without `input.agent_backend: paseo`; these run through the
+  `current` backend stub and should not be treated as delegated execution or
+  independent review.
 
 Warnings must not block execution unless the plan also has validation errors.
 

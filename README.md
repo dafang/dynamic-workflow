@@ -303,7 +303,7 @@ Example collection step with a bounded scan:
         timeout_seconds: 30
 ```
 
-`dw validate` and `dw compile` surface non-blocking warnings for brittle commands, such as broad `rg` scans without excludes, nested shell wrappers, and optional searches placed under strict `command.verify`.
+`dw validate` and `dw compile` surface non-blocking warnings for brittle commands, such as broad `rg` scans without excludes, nested shell wrappers, optional searches placed under strict `command.verify`, and `agent.*` steps that would otherwise use the `current` backend stub. For real delegated work or independent review, set `input.agent_backend: paseo` on the agent step.
 
 ## Supported Workflow Modes
 

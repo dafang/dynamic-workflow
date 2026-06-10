@@ -185,7 +185,7 @@ The runtime accepts arbitrary JSON in `input`, but these keys have established m
 
 - `prompt`: instruction for the current host agent boundary.
 - `output_schema`: optional schema requirements for agent output. These add to the built-in contract for the agent type and cannot weaken required built-in fields.
-- `agent_backend`: optional bridge for agent steps. Omit for the default current-boundary artifact behavior. Set to `paseo` to run a real local Paseo agent through `paseo run --json`.
+- `agent_backend`: optional bridge for agent steps. Omit only when the default current-boundary stub artifact is acceptable. Set to `paseo` to run a real local Paseo agent through `paseo run --json`. Complex implementation, review, synthesize, tournament, and loop plans should use `input.agent_backend: paseo` for agent steps that must perform real work or independent review.
 - `provider`, `mode`, `cwd`, `wait_timeout`, `title`, `paseo_cli`: Paseo bridge options used only when `agent_backend: paseo` is set. Always follow delegated agent work with strict `command.verify`.
 - `resource_scope`: lock scope for conflict detection.
 - `review_target`: step id or artifact target for review.
