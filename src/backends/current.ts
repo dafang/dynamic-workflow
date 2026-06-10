@@ -12,6 +12,7 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_OUTPUT_CAP_BYTES = 2_000;
 const COMMAND_PREVIEW_LENGTH = 160;
 const DEFAULT_PASEO_WAIT_TIMEOUT = "30m";
+const DEFAULT_PASEO_LOGS_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 export class CurrentBackend implements Backend {
   readonly name = "current" as const;
@@ -204,7 +205,7 @@ async function readPaseoStructuredOutputFromLogs(
   try {
     const { stdout, stderr } = await execFileAsync(paseoCli, ["logs", "--json", agentId], {
       timeout: 30_000,
-      maxBuffer: DEFAULT_OUTPUT_CAP_BYTES * 16
+      maxBuffer: DEFAULT_PASEO_LOGS_MAX_BUFFER_BYTES
     });
     const structuredOutput = extractStructuredOutputFromText(stdout);
     await context.trace?.({
@@ -220,18 +221,20 @@ async function readPaseoStructuredOutputFromLogs(
     return structuredOutput;
   } catch (error) {
     const failed = error as Error & { code?: number | string; stdout?: string; stderr?: string };
+    const structuredOutput = extractStructuredOutputFromText(failed.stdout ?? "");
     await context.trace?.({
-      event: "agent_output_logs_failed",
+      event: structuredOutput ? "agent_output_logs_parsed_after_error" : "agent_output_logs_failed",
       data: {
         backend: "paseo",
         agent_id: agentId,
         step_type: node.type,
         exit_code: typeof failed.code === "number" ? failed.code : null,
         stdout_bytes: Buffer.byteLength(failed.stdout ?? "", "utf8"),
-        stderr_bytes: Buffer.byteLength(failed.stderr ?? failed.message, "utf8")
+        stderr_bytes: Buffer.byteLength(failed.stderr ?? failed.message, "utf8"),
+        error_message: failed.message
       }
     });
-    return undefined;
+    return structuredOutput;
   }
 }
 

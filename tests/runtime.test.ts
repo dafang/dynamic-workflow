@@ -902,6 +902,47 @@ if (args[0] === "run") {
   assert.match(trace, /agent_output_logs_parsed/);
 });
 
+test("agent backend recovers structured JSON from Paseo logs stdout after log command error", async () => {
+  const rootDir = await tempRoot();
+  const fakePaseo = path.join(rootDir, "fake-paseo-logs-error.mjs");
+  await writeFile(
+    fakePaseo,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "run") {
+  process.stdout.write(JSON.stringify({ agentId: "fake-agent-logs-error", status: "completed", provider: "codex/fake" }) + "\\n");
+} else if (args[0] === "logs") {
+  process.stdout.write("[Shell] noisy output\\n" + "x".repeat(8000) + "\\n" + JSON.stringify({ artifacts: [{ path: "src/file.ts", kind: "file", status: "modified" }] }) + "\\n");
+  process.stderr.write("simulated logs truncation after stdout capture\\n");
+  process.exit(1);
+} else {
+  process.exit(9);
+}
+`,
+    "utf8"
+  );
+  await chmod(fakePaseo, 0o755);
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "execute",
+        type: "agent.execute",
+        depends_on: [],
+        input: { agent_backend: "paseo", paseo_cli: fakePaseo, provider: "codex/fake", wait_timeout: "1m" }
+      }
+    ]),
+    { rootDir, runId: "run_paseo_logs_error_json" }
+  );
+  assert.equal(result.record.state, "completed");
+  const artifact = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "execute.json"), "utf8")) as {
+    output: { artifacts: Array<{ path: string }>; agent_id: string };
+  };
+  assert.equal(artifact.output.agent_id, "fake-agent-logs-error");
+  assert.equal(artifact.output.artifacts[0]?.path, "src/file.ts");
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  assert.match(trace, /agent_output_logs_parsed_after_error/);
+});
+
 test("invalid agent JSON fails with agent_output_parse_failed and blocks downstream", async () => {
   const rootDir = await tempRoot();
   const fakePaseo = path.join(rootDir, "fake-paseo-invalid.mjs");
