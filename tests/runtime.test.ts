@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -123,6 +123,27 @@ test("command.verify caps command stdout in artifacts while recording original b
   assert.equal(artifact.output.checks[0]?.stdout.length, 2000);
   assert.equal(artifact.output.checks[0]?.stdout_bytes, 2505);
   assert.equal(artifact.output.checks[0]?.stdout_truncated, true);
+});
+
+test("command steps can execute in input cwd", async () => {
+  const rootDir = await tempRoot();
+  const workspace = await tempRoot();
+  await writeFile(path.join(workspace, "target.txt"), "workspace file\n", "utf8");
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "verify",
+        type: "command.verify",
+        depends_on: [],
+        input: { cwd: workspace },
+        verify: { commands: ["test -f target.txt"] }
+      }
+    ]),
+    { rootDir, runId: "run_command_cwd" }
+  );
+  assert.equal(result.record.state, "completed");
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  assert.match(trace, new RegExp(JSON.stringify(workspace).slice(1, -1)));
 });
 
 test("command.verify records non-zero command failure category and blocks downstream", async () => {
@@ -627,6 +648,285 @@ test("current backend is default and external backends are rejected before execu
       }),
     /unsupported_backend/
   );
+});
+
+test("agent steps emit valid built-in structured output fields for every agent type", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      { step_id: "classify", type: "agent.classify", depends_on: [], input: { label: "feature" } },
+      { step_id: "execute", type: "agent.execute", depends_on: [] },
+      { step_id: "review", type: "agent.review", depends_on: [] },
+      { step_id: "synthesize", type: "agent.synthesize", depends_on: [] },
+      { step_id: "generate", type: "agent.generate", depends_on: [] },
+      { step_id: "filter", type: "agent.filter", depends_on: [], input: { accepted: ["a"], rejected: ["b"] } },
+      { step_id: "judge", type: "agent.judge_pair", depends_on: [], input: { candidate_a: "a", candidate_b: "b" } }
+    ]),
+    { rootDir, runId: "run_agent_contract_fields" }
+  );
+  assert.equal(result.record.state, "completed");
+  const classify = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "classify.json"), "utf8")) as {
+    output: { label: string; confidence: number; status: string };
+  };
+  const review = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8")) as {
+    output: { ok: boolean; findings: unknown[]; blocking_count: number; context: Record<string, unknown> };
+  };
+  const synthesize = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "synthesize.json"), "utf8")) as {
+    output: { summary: string; decisions: string[]; next_actions: string[] };
+  };
+  const generate = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "generate.json"), "utf8")) as {
+    output: { candidates: Array<{ id: string; summary: string }> };
+  };
+  const filter = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "filter.json"), "utf8")) as {
+    output: { accepted: string[]; rejected: string[] };
+  };
+  const judge = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "judge.json"), "utf8")) as {
+    output: { winner: string; loser: string; rationale: string };
+  };
+  const execute = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "execute.json"), "utf8")) as {
+    output: { artifacts: unknown[]; status: string };
+  };
+  assert.equal(classify.output.label, "feature");
+  assert.equal(classify.output.confidence, 1);
+  assert.equal(classify.output.status, "succeeded");
+  assert.equal(review.output.ok, true);
+  assert.deepEqual(review.output.findings, []);
+  assert.equal(review.output.blocking_count, 0);
+  assert.match(synthesize.output.summary, /Executed synthesize/);
+  assert.deepEqual(synthesize.output.decisions, []);
+  assert.deepEqual(synthesize.output.next_actions, []);
+  assert.equal(generate.output.candidates.length, 1);
+  assert.deepEqual(filter.output.accepted, ["a"]);
+  assert.deepEqual(filter.output.rejected, ["b"]);
+  assert.equal(judge.output.winner, "a");
+  assert.equal(judge.output.loser, "b");
+  assert.match(judge.output.rationale, /selected/);
+  assert.deepEqual(execute.output.artifacts, []);
+});
+
+test("agent steps can delegate to an opt-in Paseo CLI backend and downstream verification sees files", async () => {
+  const rootDir = await tempRoot();
+  const workspace = await tempRoot();
+  const fakePaseo = path.join(rootDir, "fake-paseo.mjs");
+  await writeFile(
+    fakePaseo,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+
+const args = process.argv.slice(2);
+const cwd = args[args.indexOf("--cwd") + 1];
+const title = args[args.indexOf("--title") + 1];
+const prompt = args.at(-1) || "";
+if (!prompt.includes("Return a single JSON object")) process.exit(12);
+if (!prompt.includes('"artifacts"')) process.exit(13);
+writeFileSync(path.join(cwd, "agent-output.txt"), "fake paseo agent wrote this file\\n");
+process.stdout.write(JSON.stringify({ agentId: "fake-agent-1", status: "completed", provider: "codex/fake", cwd, title, output: { artifacts: [{ path: "agent-output.txt", kind: "file", status: "created" }] } }) + "\\n");
+`,
+    "utf8"
+  );
+  await chmod(fakePaseo, 0o755);
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "implement",
+        type: "agent.execute",
+        depends_on: [],
+        input: {
+          agent_backend: "paseo",
+          paseo_cli: fakePaseo,
+          cwd: workspace,
+          provider: "codex/fake",
+          mode: "full-access",
+          title: "DW fake bridge",
+          wait_timeout: "1m",
+          prompt: "Create the requested module."
+        }
+      },
+      {
+        step_id: "verify",
+        type: "command.verify",
+        depends_on: ["implement"],
+        verify: {
+          commands: [
+            `node -e "require('node:fs').accessSync(process.argv[1])" ${JSON.stringify(path.join(workspace, "agent-output.txt"))}`
+          ]
+        }
+      }
+    ]),
+    { rootDir, runId: "run_paseo_bridge" }
+  );
+  assert.equal(result.record.state, "completed");
+  assert.equal(result.record.steps.implement?.state, "succeeded");
+  assert.equal(result.record.steps.verify?.state, "succeeded");
+  const artifactText = await readFile(path.join(result.record.run_dir, "steps", "implement.json"), "utf8");
+  const artifact = JSON.parse(artifactText) as {
+    output: { agent_backend: string; agent_id: string; agent_status: string; cwd: string; artifacts: Array<{ path: string }> };
+  };
+  assert.equal(artifact.output.agent_backend, "paseo");
+  assert.equal(artifact.output.agent_id, "fake-agent-1");
+  assert.equal(artifact.output.agent_status, "completed");
+  assert.equal(artifact.output.cwd, workspace);
+  assert.equal(artifact.output.artifacts[0]?.path, "agent-output.txt");
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  assert.match(trace, /agent_backend_started/);
+  assert.match(trace, /agent_backend_finished/);
+});
+
+test("agent backend extracts fenced structured JSON output", async () => {
+  const rootDir = await tempRoot();
+  const fakePaseo = path.join(rootDir, "fake-paseo-fenced.mjs");
+  await writeFile(
+    fakePaseo,
+    `#!/usr/bin/env node
+process.stdout.write("agent finished\\n\`\`\`json\\n" + JSON.stringify({ agentId: "fake-agent-2", status: "completed", output: { ok: true, findings: [], blocking_count: 0 } }) + "\\n\`\`\`\\n");
+`,
+    "utf8"
+  );
+  await chmod(fakePaseo, 0o755);
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: [],
+        input: { agent_backend: "paseo", paseo_cli: fakePaseo, provider: "codex/fake", wait_timeout: "1m" }
+      }
+    ]),
+    { rootDir, runId: "run_paseo_fenced_json" }
+  );
+  assert.equal(result.record.state, "completed");
+  const artifact = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8")) as {
+    output: { ok: boolean; blocking_count: number; agent_id: string };
+  };
+  assert.equal(artifact.output.ok, true);
+  assert.equal(artifact.output.blocking_count, 0);
+  assert.equal(artifact.output.agent_id, "fake-agent-2");
+});
+
+test("agent backend reads structured JSON from Paseo logs when run output only has metadata", async () => {
+  const rootDir = await tempRoot();
+  const fakePaseo = path.join(rootDir, "fake-paseo-logs.mjs");
+  await writeFile(
+    fakePaseo,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "run") {
+  process.stdout.write(JSON.stringify({ agentId: "fake-agent-logs", status: "completed", provider: "codex/fake" }) + "\\n");
+} else if (args[0] === "logs") {
+  process.stdout.write("[User] prompt\\n" + JSON.stringify({ ok: true, findings: [], blocking_count: 0 }) + "\\n");
+} else {
+  process.exit(9);
+}
+`,
+    "utf8"
+  );
+  await chmod(fakePaseo, 0o755);
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: [],
+        input: { agent_backend: "paseo", paseo_cli: fakePaseo, provider: "codex/fake", wait_timeout: "1m" }
+      }
+    ]),
+    { rootDir, runId: "run_paseo_logs_json" }
+  );
+  assert.equal(result.record.state, "completed");
+  const artifact = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8")) as {
+    output: { ok: boolean; blocking_count: number; agent_id: string };
+  };
+  assert.equal(artifact.output.ok, true);
+  assert.equal(artifact.output.blocking_count, 0);
+  assert.equal(artifact.output.agent_id, "fake-agent-logs");
+  const trace = await readFile(path.join(result.record.run_dir, "trace.jsonl"), "utf8");
+  assert.match(trace, /agent_output_logs_parsed/);
+});
+
+test("invalid agent JSON fails with agent_output_parse_failed and blocks downstream", async () => {
+  const rootDir = await tempRoot();
+  const fakePaseo = path.join(rootDir, "fake-paseo-invalid.mjs");
+  await writeFile(
+    fakePaseo,
+    `#!/usr/bin/env node
+process.stdout.write("not json");
+`,
+    "utf8"
+  );
+  await chmod(fakePaseo, 0o755);
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: [],
+        input: { agent_backend: "paseo", paseo_cli: fakePaseo, provider: "codex/fake", wait_timeout: "1m" }
+      },
+      { step_id: "after", type: "agent.synthesize", depends_on: ["review"] }
+    ]),
+    { rootDir, runId: "run_agent_invalid_json" }
+  );
+  assert.equal(result.record.state, "failed");
+  assert.equal(result.record.steps.after?.state, "blocked");
+  const artifact = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8")) as {
+    output: { reason: string };
+  };
+  assert.equal(artifact.output.reason, "agent_output_parse_failed");
+});
+
+test("schema-mismatched agent JSON fails with schema_validation_failed", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "review",
+        type: "agent.review",
+        depends_on: [],
+        input: { output: { blocking_count: "one" } }
+      },
+      { step_id: "after", type: "agent.synthesize", depends_on: ["review"] }
+    ]),
+    { rootDir, runId: "run_agent_schema_mismatch" }
+  );
+  assert.equal(result.record.state, "failed");
+  assert.equal(result.record.steps.after?.state, "blocked");
+  const artifact = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "review.json"), "utf8")) as {
+    output: { reason: string; validation_errors: Array<{ path: string; message: string }> };
+  };
+  assert.equal(artifact.output.reason, "schema_validation_failed");
+  assert.ok(artifact.output.validation_errors.some((error) => error.path === "$.blocking_count"));
+});
+
+test("custom agent output schema succeeds and remains additive to built-in fields", async () => {
+  const rootDir = await tempRoot();
+  const result = await runWorkflow(
+    plan([
+      {
+        step_id: "classify",
+        type: "agent.classify",
+        depends_on: [],
+        input: {
+          label: "feature",
+          output: { risk_area: "runtime" },
+          output_schema: {
+            type: "object",
+            required: ["risk_area"],
+            properties: { risk_area: { type: "string", enum: ["runtime", "docs"] } },
+            additionalProperties: true
+          }
+        }
+      }
+    ]),
+    { rootDir, runId: "run_agent_custom_schema" }
+  );
+  assert.equal(result.record.state, "completed");
+  const artifact = JSON.parse(await readFile(path.join(result.record.run_dir, "steps", "classify.json"), "utf8")) as {
+    output: { label: string; confidence: number; risk_area: string };
+  };
+  assert.equal(artifact.output.label, "feature");
+  assert.equal(artifact.output.confidence, 1);
+  assert.equal(artifact.output.risk_area, "runtime");
 });
 
 test("artifact output redacts secrets and raw prompts", async () => {

@@ -19,6 +19,7 @@
 - [06-typed-plan-runtime.md](./06-typed-plan-runtime.md)：typed plan 如何表达 dynamic workflow 模式，以及如何稳定驱动 agent 执行。
 - [07-js-first-dataflow-runtime.md](./07-js-first-dataflow-runtime.md)：下一阶段的 JS-first authoring、manifest IR、artifact dataflow 和上下文注入设计。
 - [08-command-execution-quality.md](./08-command-execution-quality.md)：命令执行质量、`command.collect`、trace 元数据、诊断分类和 lint warning 契约。
+- [09-agent-output-contracts.md](./09-agent-output-contracts.md)：每类 `agent.*` 的稳定输出字段、schema 子集、dataflow 用法和 runtime fail-closed 语义。
 - [samples/js-harness-pseudocode.js](./samples/js-harness-pseudocode.js)：Claude-style JS harness 伪代码。
 - [samples/typed-plan.yaml](./samples/typed-plan.yaml)：Product-style typed workflow plan 示例。
 

@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { compileHarnessToPlan } from "../src/harness.js";
 import { readJson } from "../src/artifacts.js";
+import { compilePlan } from "../src/compiler.js";
 import { runWorkflow } from "../src/runtime.js";
 import { STEP_REGISTRY } from "../src/registry.js";
 import type { JsonObject, WorkflowPlan, WorkflowStep } from "../src/types.js";
@@ -15,6 +16,10 @@ import type { JsonObject, WorkflowPlan, WorkflowStep } from "../src/types.js";
 const execFileAsync = promisify(execFile);
 const binPath = path.resolve("bin/dw.mjs");
 const MATRIX_PATH = path.resolve("tests/fixtures/workflow-mode-matrix.md");
+
+interface StepArtifact {
+  output: JsonObject;
+}
 
 function plan(workflowId: string, steps: WorkflowStep[]): WorkflowPlan {
   return {
@@ -141,7 +146,7 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
   const { verifierCommand } = await createTempModule();
   const rootDir = await tempRoot("dw-mode-runtime-");
   const workflowPlan = plan("dwf_mode_matrix_runtime", [
-    { step_id: "classify", type: "agent.classify", depends_on: [] },
+    { step_id: "classify", type: "agent.classify", depends_on: [], input: { label: "feature" } },
     { step_id: "candidate_a", type: "agent.generate", depends_on: [], input: { resource_scope: "candidate_a" } },
     { step_id: "candidate_b", type: "agent.generate", depends_on: [], input: { resource_scope: "candidate_b" } },
     { step_id: "candidate_c", type: "agent.generate", depends_on: [], input: { resource_scope: "candidate_c" } },
@@ -150,10 +155,11 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
       type: "agent.filter",
       depends_on: ["candidate_a", "candidate_b", "candidate_c"],
       consumes: [
-        { from: "candidate_a", select: "$.output.status", as: "candidate_a_status" },
-        { from: "candidate_b", select: "$.output.status", as: "candidate_b_status" },
-        { from: "candidate_c", select: "$.output.status", as: "candidate_c_status" }
-      ]
+        { from: "candidate_a", select: "$.output.candidates[*].id", as: "candidate_a_ids" },
+        { from: "candidate_b", select: "$.output.candidates[*].id", as: "candidate_b_ids" },
+        { from: "candidate_c", select: "$.output.candidates[*].id", as: "candidate_c_ids" }
+      ],
+      input: { accepted: ["candidate_a_candidate", "candidate_b_candidate"], rejected: ["candidate_c_candidate"] }
     },
     {
       step_id: "direct_judge",
@@ -166,13 +172,13 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
       type: "workflow.include",
       depends_on: ["classify"],
       input: { workflow_ref: "builtin.feature" },
-      run_if: { step: "classify", output_path: "status", op: "==", value: "succeeded" }
+      run_if: { step: "classify", output_path: "label", op: "==", value: "feature" }
     },
     {
       step_id: "control_consumer",
       type: "agent.synthesize",
       depends_on: ["feature_flow"],
-      consumes: [{ from: "feature_flow", select: "$.output.status", as: "feature_terminal_status" }]
+      consumes: [{ from: "feature_flow", select: "$.output.ok", as: "feature_review_ok" }]
     },
     {
       step_id: "design_tournament",
@@ -194,8 +200,11 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
       type: "agent.synthesize",
       depends_on: ["repair_loop", "control_consumer"],
       consumes: [
-        { from: "repair_loop", select: "$.output.status", as: "repair_status" },
-        { from: "control_consumer", select: "$.output.context.feature_terminal_status", as: "included_status" }
+        { from: "repair_loop", select: "$.output.artifacts", as: "repair_artifacts" },
+        { from: "control_consumer", select: "$.output.summary", as: "included_summary" },
+        { from: "design_tournament", select: "$.output.winner", as: "tournament_winner" },
+        { from: "filter_candidates", select: "$.output.accepted", as: "accepted_candidates" },
+        { from: "direct_judge", select: "$.output.rationale", as: "direct_judge_rationale" }
       ]
     },
     {
@@ -206,6 +215,21 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
     }
   ]);
 
+  const compiled = compilePlan(workflowPlan);
+  assert.deepEqual(compiled.nodes.find((node) => node.step_id === "feature_flow__implement")?.run_if, {
+    step: "classify",
+    output_path: "label",
+    op: "==",
+    value: "feature"
+  });
+  assert.deepEqual(compiled.nodes.find((node) => node.step_id === "final_synthesis")?.consumes, [
+    { from: "repair_loop__round_3", select: "$.output.artifacts", as: "repair_artifacts" },
+    { from: "control_consumer", select: "$.output.summary", as: "included_summary" },
+    { from: "design_tournament__judge_2", select: "$.output.winner", as: "tournament_winner" },
+    { from: "filter_candidates", select: "$.output.accepted", as: "accepted_candidates" },
+    { from: "direct_judge", select: "$.output.rationale", as: "direct_judge_rationale" }
+  ]);
+
   const result = await runWorkflow(workflowPlan, { rootDir, runId: "run_mode_matrix_runtime" });
   assert.equal(result.record.state, "completed", "runtime matrix workflow should complete");
   assert.ok(result.markers.includes("DW_RUN_COMPLETE"), "runtime matrix should emit DW_RUN_COMPLETE");
@@ -213,17 +237,39 @@ test("runtime covers fan-out, generate/filter/judge, include, loop, tournament, 
   assert.equal(result.record.steps.feature_flow__review?.state, "succeeded", "run_if true include branch should execute review");
   assert.deepEqual(result.manifest.dependencies.control_consumer, ["feature_flow__review"], "include dependency should rewrite to terminal node");
   assert.deepEqual(result.manifest.nodes.find((node) => node.step_id === "control_consumer")?.consumes, [
-    { from: "feature_flow__review", select: "$.output.status", as: "feature_terminal_status" }
+    { from: "feature_flow__review", select: "$.output.ok", as: "feature_review_ok" }
   ]);
   assert.deepEqual(result.manifest.dependencies.repair_loop__round_1, ["design_tournament__judge_2"], "loop should depend on tournament terminal judge");
   assert.deepEqual(result.manifest.dependencies.final_synthesis, ["control_consumer", "repair_loop__round_3"], "synthesis should depend on loop terminal round");
   assert.equal(result.record.steps.design_tournament__judge_1?.state, "succeeded", "first tournament judge should run");
   assert.equal(result.record.steps.design_tournament__judge_2?.state, "succeeded", "terminal tournament judge should run");
   assert.equal(result.record.steps.repair_loop__round_3?.state, "succeeded", "third loop round should run");
-  const filterArtifact = await readJson<JsonObject>(path.join(result.record.run_dir, "steps", "filter_candidates.json"));
-  assert.match(JSON.stringify(filterArtifact.output), /candidate_a_status/, "filter should consume generated candidate context");
-  const finalArtifact = await readJson<JsonObject>(path.join(result.record.run_dir, "steps", "final_synthesis.json"));
-  assert.match(JSON.stringify(finalArtifact.output), /repair_status/, "final synthesis should consume loop terminal context");
+  const classifyArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "classify.json"));
+  assert.equal(classifyArtifact.output?.["label"], "feature", "classify should expose label");
+  assert.equal(classifyArtifact.output?.["confidence"], 1, "classify should expose confidence");
+  const reviewArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "feature_flow__review.json"));
+  assert.equal(reviewArtifact.output?.["ok"], true, "review should expose ok");
+  assert.deepEqual(reviewArtifact.output?.["findings"], [], "review should expose findings");
+  assert.equal(reviewArtifact.output?.["blocking_count"], 0, "review should expose blocking_count");
+  const candidateArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "candidate_a.json"));
+  assert.ok(Array.isArray(candidateArtifact.output?.["candidates"]), "generate should expose candidates");
+  const filterArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "filter_candidates.json"));
+  assert.deepEqual(filterArtifact.output?.["accepted"], ["candidate_a_candidate", "candidate_b_candidate"], "filter should expose accepted");
+  assert.deepEqual(filterArtifact.output?.["rejected"], ["candidate_c_candidate"], "filter should expose rejected");
+  assert.match(JSON.stringify(filterArtifact.output), /candidate_a_ids/, "filter should consume generated candidate ids");
+  const judgeArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "design_tournament__judge_2.json"));
+  assert.equal(judgeArtifact.output?.["winner"], "design_tournament__judge_1", "tournament judge should expose winner");
+  assert.equal(judgeArtifact.output?.["loser"], "candidate_c", "tournament judge should expose loser");
+  assert.match(String(judgeArtifact.output?.["rationale"]), /selected/, "tournament judge should expose rationale");
+  const repairArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "repair_loop__round_3.json"));
+  assert.deepEqual(repairArtifact.output?.["artifacts"], [], "execute loop should expose artifacts");
+  const finalArtifact = await readJson<StepArtifact>(path.join(result.record.run_dir, "steps", "final_synthesis.json"));
+  assert.match(String(finalArtifact.output?.["summary"]), /Executed final_synthesis/, "synthesize should expose summary");
+  assert.deepEqual(finalArtifact.output?.["decisions"], [], "synthesize should expose decisions");
+  assert.deepEqual(finalArtifact.output?.["next_actions"], [], "synthesize should expose next_actions");
+  assert.match(JSON.stringify(finalArtifact.output), /repair_artifacts/, "final synthesis should consume loop terminal artifacts");
+  assert.match(JSON.stringify(finalArtifact.output), /tournament_winner/, "final synthesis should consume tournament winner");
+  assert.match(JSON.stringify(finalArtifact.output), /accepted_candidates/, "final synthesis should consume filter output");
 });
 
 test("include bugfix flow and run_if false branch compile into expected skipped control nodes", async () => {

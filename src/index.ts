@@ -41,3 +41,13 @@ export type { RunRecord } from "./store.js";
 export { runCli } from "./cli.js";
 export { compileHarnessToPlan, HARNESS_ALLOWED_PRIMITIVES, HARNESS_DENIED_CAPABILITIES } from "./harness.js";
 export type { HarnessCompileResult } from "./harness.js";
+export {
+  AGENT_OUTPUT_CONTRACTS,
+  AGENT_STEP_TYPES,
+  SUPPORTED_JSON_SCHEMA_KEYWORDS,
+  agentContractSchemaAsJson,
+  buildAgentOutputInstructions,
+  getAgentOutputContract,
+  isAgentStepType
+} from "./agent-contracts.js";
+export type { AgentOutputContract, AgentStepType, JsonSchemaPrimitiveType, JsonSchemaSubset } from "./agent-contracts.js";

@@ -184,6 +184,9 @@ evidence explicitly with `consumes`.
 The runtime accepts arbitrary JSON in `input`, but these keys have established meaning:
 
 - `prompt`: instruction for the current host agent boundary.
+- `output_schema`: optional schema requirements for agent output. These add to the built-in contract for the agent type and cannot weaken required built-in fields.
+- `agent_backend`: optional bridge for agent steps. Omit for the default current-boundary artifact behavior. Set to `paseo` to run a real local Paseo agent through `paseo run --json`.
+- `provider`, `mode`, `cwd`, `wait_timeout`, `title`, `paseo_cli`: Paseo bridge options used only when `agent_backend: paseo` is set. Always follow delegated agent work with strict `command.verify`.
 - `resource_scope`: lock scope for conflict detection.
 - `review_target`: step id or artifact target for review.
 - `force_fail`: test fixture flag; `true` forces failure in the current backend and should not be used in real plans.
@@ -192,6 +195,60 @@ Candidate and comparison steps commonly use:
 
 - `criteria`: array of strings used by `agent.filter`, `agent.judge_pair`, or `workflow.tournament`.
 - `candidate_a`, `candidate_b`: candidate step ids for `agent.judge_pair`. Control step ids are rewritten to terminal nodes when unambiguous.
+
+## Agent Output Contracts
+
+Every `agent.*` step writes stable fields under `artifact.output` so later steps can use `run_if` and `consumes` against typed data instead of prose.
+
+| Type | Stable fields under `artifact.output` |
+| --- | --- |
+| `agent.classify` | `label`, `confidence`, optional `metadata` |
+| `agent.review` | `ok`, `findings`, `blocking_count`, optional `metadata` |
+| `agent.synthesize` | `summary`, `decisions`, `next_actions`, optional `metadata` |
+| `agent.generate` | `candidates`, optional `metadata` |
+| `agent.filter` | `accepted`, `rejected`, optional `metadata` |
+| `agent.judge_pair` | `winner`, `loser`, `rationale`, optional `metadata` |
+| `agent.execute` | `artifacts`, optional `metadata`; delegated runs may also include Paseo metadata |
+
+`input.output_schema` and `verify.output_schema` add step-specific schema requirements. They do not weaken the built-in contract. If an agent emits invalid JSON or misses a required field, runtime fails the step and blocks downstream dependents.
+
+Supported schema subset: `object`, `array`, `string`, `number`, `integer`, `boolean`, `enum`, `required`, `properties`, `items`, and `additionalProperties`.
+
+Example branch using a classifier output:
+
+```yaml
+- step_id: classify_request
+  type: agent.classify
+  depends_on: []
+  input:
+    prompt: Classify the request as feature, bugfix, research, or docs.
+
+- step_id: feature_flow
+  type: workflow.include
+  depends_on: [classify_request]
+  input:
+    workflow_ref: builtin.feature
+  run_if:
+    step: classify_request
+    output_path: label
+    op: ==
+    value: feature
+```
+
+Example explicit dataflow using review fields:
+
+```yaml
+- step_id: summarize_review
+  type: agent.synthesize
+  depends_on: [review_impl]
+  consumes:
+    - from: review_impl
+      select: $.output.blocking_count
+      as: blocking_count
+    - from: review_impl
+      select: $.output.findings
+      as: findings
+```
 
 ## Control Step Inputs
 

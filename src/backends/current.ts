@@ -1,14 +1,17 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { buildAgentOutputInstructions, isAgentStepType } from "../agent-contracts.js";
+import type { AgentStepType } from "../agent-contracts.js";
 import type { Backend, BackendStepResult, StepContext } from "../backend.js";
 import type { CompiledNode } from "../compiler.js";
-import type { CommandDeclaration, JsonObject } from "../types.js";
+import type { CommandDeclaration, JsonObject, JsonValue } from "../types.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_OUTPUT_CAP_BYTES = 2_000;
 const COMMAND_PREVIEW_LENGTH = 160;
+const DEFAULT_PASEO_WAIT_TIMEOUT = "30m";
 
 export class CurrentBackend implements Backend {
   readonly name = "current" as const;
@@ -31,19 +34,466 @@ export class CurrentBackend implements Backend {
         output: { status: "failed", step_id: node.step_id, reason: "force_fail" }
       };
     }
+    if (node.input.agent_backend === "paseo") {
+      return executePaseoAgent(node, context);
+    }
+    const summary = `Executed ${node.step_id} through current host boundary.`;
     return {
       status: "succeeded",
-      summary: `Executed ${node.step_id} through current host boundary.`,
+      summary,
+      output: buildCurrentAgentOutput(node, context, summary)
+    };
+  }
+}
+
+interface PaseoRunOutput {
+  agentId?: string;
+  status?: string;
+  provider?: string;
+  cwd?: string;
+  title?: string;
+  structuredOutput?: JsonObject;
+}
+
+async function executePaseoAgent(node: CompiledNode, context: StepContext): Promise<BackendStepResult> {
+  const prompt = agentPrompt(node, context);
+  const cwd = stringInput(node, "cwd") ?? process.cwd();
+  const provider = stringInput(node, "provider") ?? process.env.DW_PASEO_PROVIDER ?? "codex/gpt-5.5";
+  const mode = stringInput(node, "mode") ?? process.env.DW_PASEO_MODE ?? "full-access";
+  const title = stringInput(node, "title") ?? `DW ${node.step_id}`;
+  const waitTimeout = stringInput(node, "wait_timeout") ?? DEFAULT_PASEO_WAIT_TIMEOUT;
+  const paseoCli = stringInput(node, "paseo_cli") ?? process.env.DW_PASEO_CLI ?? "paseo";
+  const args = [
+    "run",
+    "--json",
+    "--provider",
+    provider,
+    "--mode",
+    mode,
+    "--cwd",
+    cwd,
+    "--title",
+    title,
+    "--wait-timeout",
+    waitTimeout,
+    prompt
+  ];
+  const start = Date.now();
+  await context.trace?.({
+    event: "agent_backend_started",
+    data: {
+      backend: "paseo",
+      provider,
+      mode,
+      cwd,
+      title,
+      wait_timeout: waitTimeout
+    }
+  });
+  try {
+    const { stdout, stderr } = await execFileAsync(paseoCli, args, { timeout: paseoTimeoutMs(waitTimeout) + 5_000 });
+    let parsed: PaseoRunOutput;
+    try {
+      parsed = parsePaseoRunOutput(stdout);
+    } catch (error) {
+      const elapsedMs = Date.now() - start;
+      await context.trace?.({
+        event: "agent_output_parse_failed",
+        data: {
+          backend: "paseo",
+          elapsed_ms: elapsedMs,
+          stdout_bytes: Buffer.byteLength(stdout, "utf8"),
+          stderr_bytes: Buffer.byteLength(stderr ?? "", "utf8")
+        }
+      });
+      return {
+        status: "failed",
+        summary: `Paseo agent output could not be parsed for ${node.step_id}: ${(error as Error).message}`,
+        output: {
+          status: "failed",
+          step_id: node.step_id,
+          type: node.type,
+          agent_backend: "paseo",
+          reason: "agent_output_parse_failed",
+          stdout: clipTail(stdout, DEFAULT_OUTPUT_CAP_BYTES).value,
+          stderr: clipTail(stderr ?? "", DEFAULT_OUTPUT_CAP_BYTES).value
+        }
+      };
+    }
+    if (!parsed.structuredOutput && parsed.agentId) {
+      const logsOutput = await readPaseoStructuredOutputFromLogs(paseoCli, parsed.agentId, node, context);
+      if (logsOutput) {
+        parsed.structuredOutput = logsOutput;
+      }
+    }
+    const elapsedMs = Date.now() - start;
+    const traceData: JsonObject = {
+      backend: "paseo",
+      elapsed_ms: elapsedMs,
+      stdout_bytes: Buffer.byteLength(stdout, "utf8"),
+      stderr_bytes: Buffer.byteLength(stderr ?? "", "utf8")
+    };
+    assignJsonOptional(traceData, "agent_id", parsed.agentId);
+    assignJsonOptional(traceData, "status", parsed.status);
+    await context.trace?.({
+      event: "agent_backend_finished",
+      data: traceData
+    });
+    const succeeded = parsed.status === "completed" || parsed.status === "idle" || parsed.status === "succeeded";
+    const output: JsonObject = {
+      ...(parsed.structuredOutput ?? {}),
+      status: succeeded ? "succeeded" : "failed",
+      step_id: node.step_id,
+      type: node.type,
+      agent_backend: "paseo",
+      agent_id: parsed.agentId ?? "",
+      agent_status: parsed.status ?? "unknown",
+      provider: parsed.provider ?? provider,
+      cwd: parsed.cwd ?? cwd,
+      title: parsed.title ?? title,
+      elapsed_ms: elapsedMs,
+      context: context.inputs,
+      context_sources: context.sources.map((source) => ({ ...source })),
+      stderr: clipTail(stderr ?? "", DEFAULT_OUTPUT_CAP_BYTES).value
+    };
+    return {
+      status: succeeded ? "succeeded" : "failed",
+      summary: succeeded
+        ? `Paseo agent ${parsed.agentId ?? "unknown"} completed ${node.step_id}.`
+        : `Paseo agent ${parsed.agentId ?? "unknown"} ended with status ${parsed.status ?? "unknown"}.`,
+      output
+    };
+  } catch (error) {
+    const failed = error as Error & { code?: number | string; stdout?: string; stderr?: string; signal?: string };
+    const elapsedMs = Date.now() - start;
+    await context.trace?.({
+      event: "agent_backend_failed",
+      data: {
+        backend: "paseo",
+        elapsed_ms: elapsedMs,
+        exit_code: typeof failed.code === "number" ? failed.code : null,
+        signal: typeof failed.signal === "string" ? failed.signal : null,
+        stdout_bytes: Buffer.byteLength(failed.stdout ?? "", "utf8"),
+        stderr_bytes: Buffer.byteLength(failed.stderr ?? failed.message, "utf8")
+      }
+    });
+    return {
+      status: "failed",
+      summary: `Paseo agent backend failed for ${node.step_id}: ${failed.message}`,
       output: {
-        status: "succeeded",
+        status: "failed",
         step_id: node.step_id,
         type: node.type,
-        summary: `Executed ${node.step_id} through current host boundary.`,
-        context: context.inputs,
-        context_sources: context.sources.map((source) => ({ ...source })),
-        artifacts: []
+        agent_backend: "paseo",
+        reason: "agent_backend_failed",
+        exit_code: typeof failed.code === "number" ? failed.code : null,
+        signal: typeof failed.signal === "string" ? failed.signal : null,
+        stdout: clipTail(failed.stdout ?? "", DEFAULT_OUTPUT_CAP_BYTES).value,
+        stderr: clipTail(failed.stderr ?? failed.message, DEFAULT_OUTPUT_CAP_BYTES).value
       }
     };
+  }
+}
+
+async function readPaseoStructuredOutputFromLogs(
+  paseoCli: string,
+  agentId: string,
+  node: CompiledNode,
+  context: StepContext
+): Promise<JsonObject | undefined> {
+  try {
+    const { stdout, stderr } = await execFileAsync(paseoCli, ["logs", "--json", agentId], {
+      timeout: 30_000,
+      maxBuffer: DEFAULT_OUTPUT_CAP_BYTES * 16
+    });
+    const structuredOutput = extractStructuredOutputFromText(stdout);
+    await context.trace?.({
+      event: structuredOutput ? "agent_output_logs_parsed" : "agent_output_logs_missing",
+      data: {
+        backend: "paseo",
+        agent_id: agentId,
+        step_type: node.type,
+        stdout_bytes: Buffer.byteLength(stdout, "utf8"),
+        stderr_bytes: Buffer.byteLength(stderr ?? "", "utf8")
+      }
+    });
+    return structuredOutput;
+  } catch (error) {
+    const failed = error as Error & { code?: number | string; stdout?: string; stderr?: string };
+    await context.trace?.({
+      event: "agent_output_logs_failed",
+      data: {
+        backend: "paseo",
+        agent_id: agentId,
+        step_type: node.type,
+        exit_code: typeof failed.code === "number" ? failed.code : null,
+        stdout_bytes: Buffer.byteLength(failed.stdout ?? "", "utf8"),
+        stderr_bytes: Buffer.byteLength(failed.stderr ?? failed.message, "utf8")
+      }
+    });
+    return undefined;
+  }
+}
+
+function extractStructuredOutputFromText(value: string): JsonObject | undefined {
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/gi) ?? [];
+  for (const block of fenced.reverse()) {
+    const body = block.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const parsed = tryParseJsonObject(body);
+    if (parsed) return parsed;
+  }
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reverse();
+  for (const line of lines) {
+    const direct = tryParseJsonObject(line);
+    if (direct) return direct;
+    const start = line.indexOf("{");
+    const end = line.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const embedded = tryParseJsonObject(line.slice(start, end + 1));
+      if (embedded) return embedded;
+    }
+  }
+  return extractJsonObject(value);
+}
+
+function agentPrompt(node: CompiledNode, context: StepContext): string {
+  const prompt = stringInput(node, "prompt");
+  const outputSchema = recordInput(node, "output_schema") ?? node.verify?.output_schema;
+  const contractInstructions = isAgentStepType(node.type)
+    ? `\n\n${buildAgentOutputInstructions(node.type, outputSchema)}`
+    : "";
+  const contextBlock =
+    Object.keys(context.inputs).length > 0
+      ? `\n\nDynamic Workflow context JSON:\n${JSON.stringify(context.inputs, null, 2)}`
+      : "";
+  return [
+    `Dynamic Workflow step: ${node.step_id}`,
+    `Step type: ${node.type}`,
+    prompt ?? "Execute this workflow step according to the available repository context.",
+    contractInstructions,
+    contextBlock
+  ]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+}
+
+function buildCurrentAgentOutput(node: CompiledNode, context: StepContext, summary: string): JsonObject {
+  const common: JsonObject = {
+    status: "succeeded",
+    step_id: node.step_id,
+    type: node.type,
+    summary,
+    context: context.inputs,
+    context_sources: context.sources.map((source) => ({ ...source }))
+  };
+  const contractOutput = isAgentStepType(node.type) ? defaultContractOutput(node, node.type, summary) : {};
+  return {
+    ...common,
+    ...contractOutput,
+    ...(recordInput(node, "output") ?? recordInput(node, "structured_output") ?? {})
+  };
+}
+
+function defaultContractOutput(node: CompiledNode, type: AgentStepType, summary: string): JsonObject {
+  const metadata: JsonObject = { contract: type, generated_by: "current_stub" };
+  switch (type) {
+    case "agent.classify":
+      return {
+        label: stringInput(node, "label") ?? "unclassified",
+        confidence: numberInput(node, "confidence") ?? 1,
+        rationale: "Default current-backend classification.",
+        metadata
+      };
+    case "agent.execute":
+      return {
+        artifacts: [],
+        metadata
+      };
+    case "agent.review":
+      return {
+        ok: true,
+        findings: [],
+        blocking_count: 0,
+        metadata
+      };
+    case "agent.synthesize":
+      return {
+        summary,
+        decisions: [],
+        next_actions: [],
+        metadata
+      };
+    case "agent.generate":
+      return {
+        candidates: [{ id: `${node.step_id}_candidate`, summary: `Candidate generated by ${node.step_id}.` }],
+        metadata
+      };
+    case "agent.filter":
+      return {
+        accepted: stringArrayInput(node, "accepted"),
+        rejected: stringArrayInput(node, "rejected"),
+        rationale: "Default current-backend filter result.",
+        metadata
+      };
+    case "agent.judge_pair": {
+      const winner = stringInput(node, "candidate_a") ?? "candidate_a";
+      const loser = stringInput(node, "candidate_b") ?? "candidate_b";
+      return {
+        winner,
+        loser,
+        rationale: `${winner} selected over ${loser} by current-backend default judge.`,
+        metadata
+      };
+    }
+  }
+}
+
+function stringInput(node: CompiledNode, key: string): string | undefined {
+  const value = node.input[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberInput(node: CompiledNode, key: string): number | undefined {
+  const value = node.input[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArrayInput(node: CompiledNode, key: string): string[] {
+  const value = node.input[key];
+  return Array.isArray(value) && value.every((item): item is string => typeof item === "string") ? value : [];
+}
+
+function recordInput(node: CompiledNode, key: string): JsonObject | undefined {
+  const value = node.input[key];
+  return isRecord(value) ? value : undefined;
+}
+
+function parsePaseoRunOutput(stdout: string): PaseoRunOutput {
+  const trimmed = stdout.trim();
+  if (!trimmed) throw new Error("Paseo stdout was empty.");
+  const parsed = tryParseJsonObject(trimmed) ?? extractJsonObject(trimmed);
+  if (!parsed) {
+    throw new Error("No JSON object found in Paseo stdout.");
+  }
+  const output: PaseoRunOutput = {};
+  if (typeof parsed.agentId === "string") output.agentId = parsed.agentId;
+  if (typeof parsed.status === "string") output.status = parsed.status;
+  if (typeof parsed.provider === "string") output.provider = parsed.provider;
+  if (typeof parsed.cwd === "string") output.cwd = parsed.cwd;
+  if (typeof parsed.title === "string") output.title = parsed.title;
+  const structuredOutput = extractStructuredOutput(parsed);
+  if (structuredOutput) {
+    output.structuredOutput = structuredOutput;
+  }
+  return output;
+}
+
+function tryParseJsonObject(value: string): JsonObject | undefined {
+  try {
+    const parsed = JSON.parse(value) as JsonValue;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonObject(value: string): JsonObject | undefined {
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    const parsed = tryParseJsonObject(fenced[1].trim());
+    if (parsed) return parsed;
+  }
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reverse();
+  for (const line of lines) {
+    const parsed = tryParseJsonObject(line);
+    if (parsed) return parsed;
+  }
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return tryParseJsonObject(value.slice(start, end + 1));
+  }
+  return undefined;
+}
+
+function extractStructuredOutput(parsed: JsonObject): JsonObject | undefined {
+  for (const key of ["output", "structured_output", "artifact_output"]) {
+    const value = parsed[key];
+    if (isRecord(value)) return value;
+  }
+  for (const key of ["final_output", "finalMessage", "message", "content", "response", "stdout"]) {
+    const value = parsed[key];
+    if (typeof value === "string") {
+      const embedded = extractJsonObject(value);
+      if (embedded) return embedded;
+    }
+  }
+  if (hasStableAgentField(parsed)) {
+    const structured: JsonObject = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (["agentId", "status", "provider", "cwd", "title"].includes(key)) continue;
+      structured[key] = value;
+    }
+    return structured;
+  }
+  if (!("agentId" in parsed) && !("status" in parsed)) {
+    return parsed;
+  }
+  return undefined;
+}
+
+function hasStableAgentField(value: JsonObject): boolean {
+  return [
+    "label",
+    "confidence",
+    "ok",
+    "findings",
+    "blocking_count",
+    "summary",
+    "decisions",
+    "next_actions",
+    "candidates",
+    "accepted",
+    "rejected",
+    "winner",
+    "loser",
+    "rationale",
+    "artifacts"
+  ].some((key) => key in value);
+}
+
+function isRecord(value: JsonValue | undefined): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assignJsonOptional(target: JsonObject, key: string, value: string | undefined): void {
+  if (value !== undefined) {
+    target[key] = value;
+  }
+}
+
+function paseoTimeoutMs(value: string): number {
+  const match = value.match(/^(\d+)(ms|s|m|h)?$/);
+  if (!match) return 30 * 60_000;
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "ms";
+  switch (unit) {
+    case "h":
+      return amount * 60 * 60_000;
+    case "m":
+      return amount * 60_000;
+    case "s":
+      return amount * 1000;
+    default:
+      return amount;
   }
 }
 
@@ -79,6 +529,7 @@ interface NormalizedCommand {
 async function executeCommands(node: CompiledNode, context: StepContext): Promise<BackendStepResult> {
   const mode = node.type === "command.collect" ? "collect" : "verify";
   const commands = getCommands(node);
+  const cwd = commandCwd(node);
   if (commands.length === 0) {
     return {
       status: "failed",
@@ -91,7 +542,7 @@ async function executeCommands(node: CompiledNode, context: StepContext): Promis
   const gaps: JsonObject[] = [];
   for (const [index, declaration] of commands.entries()) {
     const command = normalizeCommand(declaration, index, node);
-    const result = await runShell(command, { index, context });
+    const result = await runShell(command, cwd ? { index, context, cwd } : { index, context });
     checks.push(result);
     if (!result.acceptable || result.soft_failed) {
       gaps.push(commandGap(result));
@@ -182,7 +633,7 @@ function normalizeCommand(
 
 async function runShell(
   command: NormalizedCommand,
-  options: { index: number; context: StepContext }
+  options: { index: number; context: StepContext; cwd?: string }
 ): Promise<ShellResult> {
   const start = Date.now();
   await options.context.trace?.({
@@ -191,11 +642,15 @@ async function runShell(
       command_index: options.index,
       command_id: command.id,
       command_preview: commandPreview(command.run),
+      cwd: options.cwd ?? "",
       timeout_seconds: command.timeoutMs / 1000
     }
   });
   try {
-    const { stdout, stderr } = await execFileAsync("sh", ["-c", command.run], { timeout: command.timeoutMs });
+    const { stdout, stderr } = await execFileAsync("sh", ["-c", command.run], {
+      cwd: options.cwd,
+      timeout: command.timeoutMs
+    });
     const result = buildShellResult({
       command,
       stdout: stdout ?? "",
@@ -366,6 +821,13 @@ function commandTraceData(index: number, result: ShellResult): JsonObject {
 function commandPreview(command: string): string {
   const compact = command.replace(/\s+/g, " ").trim();
   return compact.length > COMMAND_PREVIEW_LENGTH ? `${compact.slice(0, COMMAND_PREVIEW_LENGTH - 1)}…` : compact;
+}
+
+function commandCwd(node: CompiledNode): string | undefined {
+  const cwd = stringInput(node, "cwd");
+  if (cwd) return cwd;
+  const resourceScope = stringInput(node, "resource_scope");
+  return resourceScope?.startsWith("/") ? resourceScope : undefined;
 }
 
 function commandTimeoutMs(node: CompiledNode): number {

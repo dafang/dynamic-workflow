@@ -15,6 +15,7 @@ Use this skill when a user asks for a complex task to be decomposed, executed, r
 2. Write or select a typed plan from `<skill_dir>/templates/plan.yaml`; for non-trivial plans, read `<skill_dir>/references/plan.md` for the supported step types and fields.
    - Prefer explicit dataflow when a downstream `agent.review`, `agent.synthesize`, or `agent.execute` needs upstream evidence: add `consumes` entries rather than relying on `depends_on` alone.
    - Use `command.collect` for evidence gathering and optional scans. Use strict `command.verify` for tests, builds, lint, schema checks, and final acceptance.
+   - For real local agent execution, keep `backend` omitted/current and set `input.agent_backend: paseo` on the agent step. Follow it with strict `command.verify` because the agent artifact is not proof by itself.
    - Treat JS-first examples with `command(...)`, `agent.review(...)`, and `StepHandle.output(...)` as authoring guidance that captures to manifest IR; do not execute arbitrary JavaScript.
 3. Run `<skill_dir>/scripts/dw validate <plan>` and fix structured validation errors before execution. Read warning lines too; revise brittle command shapes such as broad `rg`, nested shell, or optional searches under `command.verify`.
 4. Run `<skill_dir>/scripts/dw compile <plan>` and show a concise manifest/risk summary, including warnings when present.

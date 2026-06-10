@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { isAgentStepType, validateAgentOutput } from "./agent-contracts.js";
 import { auditRun, type AuditResult } from "./audit.js";
 import { createArtifactStore, readJson, writeStepArtifact } from "./artifacts.js";
 import type { Backend, BackendStepResult } from "./backend.js";
@@ -79,31 +80,34 @@ export async function runWorkflow(planInput: unknown, options: RunWorkflowOption
           summary: (error as Error).message,
           output: { status: "failed", step_id: stepId, reason: "context_error", message: (error as Error).message }
         }));
-      state.summary = result.summary;
+      const contractedResult = await enforceAgentOutputContract(node, result, async (event) => {
+        await appendTrace(tracePath, { ...event, run_id: runId, step_id: stepId });
+      });
+      state.summary = contractedResult.summary;
       const output: JsonObject = {
         step_id: stepId,
-        status: result.status,
-        summary: result.summary,
-        output: result.output,
-        verify: result.verify ?? { ok: result.status === "succeeded", checks: [] }
+        status: contractedResult.status,
+        summary: contractedResult.summary,
+        output: contractedResult.output,
+        verify: contractedResult.verify ?? { ok: contractedResult.status === "succeeded", checks: [] }
       };
       state.output_path = await writeStepArtifact(artifactStore, stepId, output);
-      markers.push(`DW_STEP_VERIFY ${stepId} ${result.status}`);
+      markers.push(`DW_STEP_VERIFY ${stepId} ${contractedResult.status}`);
 
-      if (result.status === "succeeded") {
+      if (contractedResult.status === "succeeded") {
         state.state = "succeeded";
-        await appendTrace(tracePath, { event: "step_succeeded", run_id: runId, step_id: stepId, data: { summary: result.summary } });
+        await appendTrace(tracePath, { event: "step_succeeded", run_id: runId, step_id: stepId, data: { summary: contractedResult.summary } });
         markers.push(`DW_STEP_DONE ${stepId}`);
-      } else if (result.status === "waiting_user") {
+      } else if (contractedResult.status === "waiting_user") {
         state.state = "waiting_user";
         record.state = "waiting_user";
         await appendTrace(tracePath, { event: "step_waiting_user", run_id: runId, step_id: stepId });
       } else {
         state.state = "failed";
-        state.failure = result.summary;
+        state.failure = contractedResult.summary;
         record.state = "failed";
         blockDownstream(manifest, record.steps, stepId);
-        await appendTrace(tracePath, { event: "step_failed", run_id: runId, step_id: stepId, data: { summary: result.summary } });
+        await appendTrace(tracePath, { event: "step_failed", run_id: runId, step_id: stepId, data: { summary: contractedResult.summary } });
       }
       await store.saveRun(record);
       if (options.stopAfterStepId === stepId || record.state !== "running") break;
@@ -131,6 +135,54 @@ export async function runWorkflow(planInput: unknown, options: RunWorkflowOption
   }
   await appendTrace(tracePath, { event: "workflow_audited", run_id: runId, data: { ok: audit.ok, findings: audit.findings } });
   return { record, manifest, audit, markers };
+}
+
+async function enforceAgentOutputContract(
+  node: CompiledManifest["nodes"][number],
+  result: BackendStepResult,
+  trace: (event: { event: string; data?: JsonObject }) => Promise<void>
+): Promise<BackendStepResult> {
+  if (!isAgentStepType(node.type) || result.status !== "succeeded") {
+    return result;
+  }
+  const schemas = [recordValue(node.input.output_schema), node.verify?.output_schema].filter(
+    (schema): schema is JsonObject => schema !== undefined
+  );
+  const validation = validateAgentOutput(node.type, result.output, schemas);
+  if (validation.ok) {
+    await trace({
+      event: "agent_output_contract_validated",
+      data: { type: node.type, schema_count: schemas.length + 1 }
+    });
+    return result;
+  }
+  const validationErrors = validation.errors.map((error) => ({ path: error.path, message: error.message }));
+  await trace({
+    event: "agent_output_contract_failed",
+    data: {
+      type: node.type,
+      reason: "schema_validation_failed",
+      error_count: validationErrors.length
+    }
+  });
+  return {
+    status: "failed",
+    summary: `Agent output contract validation failed for ${node.step_id}.`,
+    output: {
+      ...result.output,
+      status: "failed",
+      reason: "schema_validation_failed",
+      validation_errors: validationErrors
+    },
+    verify: {
+      ok: false,
+      checks: [{ id: "agent_output_contract", ok: false, reason: "schema_validation_failed", errors: validationErrors }]
+    }
+  };
+}
+
+function recordValue(value: JsonValue | undefined): JsonObject | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
 }
 
 export function createRunId(plan: WorkflowPlan): string {

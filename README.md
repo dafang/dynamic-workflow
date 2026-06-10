@@ -135,6 +135,34 @@ agent.synthesize("summary", {
 
 This captures to manifest v2 with `consumes` edges. YAML/JSON typed plans remain supported as an import/export IR and for direct CLI use.
 
+Agent steps also produce typed output contracts. For example, `agent.classify`
+writes `artifact.output.label` and `artifact.output.confidence`, while
+`agent.review` writes `ok`, `findings`, and `blocking_count`. Downstream steps can
+branch or consume those fields directly:
+
+```yaml
+- step_id: classify_request
+  type: agent.classify
+  depends_on: []
+  input:
+    prompt: Classify the request as feature, bugfix, research, or docs.
+
+- step_id: feature_flow
+  type: workflow.include
+  depends_on: [classify_request]
+  input:
+    workflow_ref: builtin.feature
+  run_if:
+    step: classify_request
+    output_path: label
+    op: ==
+    value: feature
+```
+
+Use `input.output_schema` when a step needs extra required fields beyond the
+built-in contract. Runtime must fail invalid agent JSON or schema mismatches
+instead of letting downstream steps guess from prose.
+
 If your Codex version exposes local custom prompts, the installed compatibility prompt appears as:
 
 ```text
@@ -451,13 +479,15 @@ The current MVP has been exercised across:
 - `command.verify` with canonical strict `verify.commands`.
 - Manifest v2 `consumes`, `produces`, selected StepContext injection, and sanitized context source summaries.
 - JS harness capture, `StepHandle.output(...)` dataflow refs, and denied-capability checks.
+- Built-in structured output contracts for every `agent.*` step type.
+- Opt-in local Paseo delegation for `agent.*` steps via `input.agent_backend: paseo`, followed by strict command verification.
 - CLI lifecycle: `validate`, `compile`, `run`, `status`, `review`, `summarize`, and `resume`.
 
 Known limits:
 
 - `agent.filter` is registered but not deeply exercised as a complex end-to-end pattern.
 - `human.approval` can enter `waiting_user`, but a full human-resume workflow is future work.
-- Real external Codex, Claude, ACP, and remote backend adapters are deliberately rejected; only `current` executes.
+- Explicit plan `backend: codex`, `backend: claude`, `backend: acp`, and remote backend names are deliberately rejected. Real local agent execution is available only through the current backend's explicit Paseo bridge input.
 
 ## Version
 

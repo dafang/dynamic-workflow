@@ -24,6 +24,7 @@ It must stay in the tracked test fixture tree, not under local planning state su
 
 - Sequential Dataflow Module Review
 - Fan-Out Generate/Review/Filter/Synthesize
+- Agent Output Contract Dataflow
 - Conditional Include Feature/Bugfix
 - Loop + Tournament Chain
 - Human Gate + Failure/Resume

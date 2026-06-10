@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { listPermissionProfiles, listStepTypes, validatePlan } from "../src/index.js";
+import {
+  AGENT_OUTPUT_CONTRACTS,
+  AGENT_STEP_TYPES,
+  SUPPORTED_JSON_SCHEMA_KEYWORDS,
+  buildAgentOutputInstructions,
+  listPermissionProfiles,
+  listStepTypes,
+  validatePlan
+} from "../src/index.js";
 import type { WorkflowPlan } from "../src/index.js";
 
 function validPlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPlan {
@@ -45,6 +53,36 @@ test("validates a canonical plan", () => {
   const result = validatePlan(validPlan({ backend: "current" }));
   assert.equal(result.ok, true);
   assert.equal(result.plan.steps.length, 2);
+});
+
+test("agent output contracts cover every agent type with stable fields and JSON instructions", () => {
+  assert.deepEqual([...AGENT_STEP_TYPES].sort(), [
+    "agent.classify",
+    "agent.execute",
+    "agent.filter",
+    "agent.generate",
+    "agent.judge_pair",
+    "agent.review",
+    "agent.synthesize"
+  ]);
+  assert.deepEqual(Object.keys(AGENT_OUTPUT_CONTRACTS).sort(), [...AGENT_STEP_TYPES].sort());
+  assert.deepEqual(AGENT_OUTPUT_CONTRACTS["agent.classify"].stableFields, ["label", "confidence", "metadata"]);
+  assert.ok(AGENT_OUTPUT_CONTRACTS["agent.review"].stableFields.includes("blocking_count"));
+  assert.ok(AGENT_OUTPUT_CONTRACTS["agent.synthesize"].stableFields.includes("next_actions"));
+  assert.ok(AGENT_OUTPUT_CONTRACTS["agent.generate"].stableFields.includes("candidates"));
+  assert.ok(AGENT_OUTPUT_CONTRACTS["agent.filter"].stableFields.includes("accepted"));
+  assert.ok(AGENT_OUTPUT_CONTRACTS["agent.judge_pair"].stableFields.includes("winner"));
+  assert.ok(AGENT_OUTPUT_CONTRACTS["agent.execute"].stableFields.includes("artifacts"));
+  assert.ok(SUPPORTED_JSON_SCHEMA_KEYWORDS.includes("additionalProperties"));
+  const instructions = buildAgentOutputInstructions("agent.review", {
+    type: "object",
+    required: ["risk_area"],
+    properties: { risk_area: { type: "string" } },
+    additionalProperties: true
+  });
+  assert.match(instructions, /Return a single JSON object/);
+  assert.match(instructions, /blocking_count/);
+  assert.match(instructions, /risk_area/);
 });
 
 test("normalizes docs sample style plan.steps", () => {
